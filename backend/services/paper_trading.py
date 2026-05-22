@@ -522,9 +522,14 @@ def close_expired_positions(db, alpaca_pending: Optional[list] = None) -> List[D
                 cur_best = float(pos.best_price_seen or 0)
                 best = min(cur_best, exit_price) if cur_best > 0 else exit_price
                 new_stop = round(best * (1.0 + _tight_pct), 4)
+            # Extend the holding window far into the future instead of setting to None.
+            # Setting to None breaks _window_active() which returns False for None,
+            # causing subsequent HOLD signals in the same run to mishandle the position.
+            # Using 999 days effectively makes the window "never expire" while keeping
+            # _window_active() returning True so trailing-stop logic still works.
             pos.best_price_seen = best
             pos.trailing_stop_price = new_stop
-            pos.holding_window_until = None  # prevent re-triggering expiry
+            pos.holding_window_until = now + timedelta(days=999)  # effectively permanent
             closed.append({
                 "underlying": pos.underlying,
                 "execution_ticker": pos.execution_ticker,
@@ -857,15 +862,14 @@ def process_signals(
                     print(f"[paper] {underlying}: ramp promoted {_pos_ramp_stage}→{_rec_ramp_stage} (×{open_pos.ramp_promotion_count})")
                 _effective_ramp_stage = str(getattr(open_pos, "ramp_stage", None) or "probe")
                 _ramp_cap = {"probe": 0.25, "building": 0.60, "full": 1.0}.get(_effective_ramp_stage, 1.0)
-                _new_suggested *= _ramp_cap
-                _new_suggested = max(_new_suggested, 1.0)
 
-                # Only accumulate if the new signal suggests a larger position
-                # and we haven't hit the cap yet
+                # Keep _new_suggested uncapped for comparison against _cur_amount.
+                # Only apply the ramp cap to the actual accumulation delta so we
+                # don't accumulate when the full-size signal would exceed capacity.
                 _accum_amount = 0.0
                 if _new_suggested > _cur_amount and _cur_amount < _max_amount:
-                    _accum_amount = min(_new_suggested - _cur_amount, _max_amount - _cur_amount)
-                    _accum_amount = max(_accum_amount, 1.0)
+                    _raw_accum = min(_new_suggested - _cur_amount, _max_amount - _cur_amount)
+                    _accum_amount = max(_raw_accum * _ramp_cap, 1.0)
 
                     # Cap by alpaca_max_position_usd if configured
                     _max_pos_usd = None

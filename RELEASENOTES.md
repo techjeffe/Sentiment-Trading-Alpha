@@ -1,3 +1,26 @@
+# Release Notes — May 22, 2026
+
+## Live Position Stop-Loss/Take-Profit Monitoring + Client Order ID URL Encoding
+
+Two improvements to the Alpaca execution path: live position risk monitoring and order lookup robustness.
+
+**Stop-loss / take-profit monitoring before opens (alpaca_broker.py):**
+
+- `maybe_execute_alpaca_order()` now checks existing live positions for stop-loss and take-profit triggers before allowing a new open
+- Reads `stop_loss_pct` (default 2.0%) and `take_profit_pct` (default 3.0%) from config
+- `_check_live_position_stop_loss()` and `_check_live_position_take_profit()` fetch the current Alpaca position, compute P&L percentage, and compare against thresholds
+- If a stop-loss or take-profit is triggered, the new open is blocked and recorded in `alpaca_orders` with `status="skipped"` and a reason like `"stop_loss_hit: live position P&L -3.42%"`
+- Prevents adding to positions that have already hit their risk limits
+
+**Client order ID URL encoding (alpaca_broker.py):**
+
+- `get_order_by_client_id()` now URL-encodes the client_order_id via `urllib.parse.quote(client_order_id, safe="")` before sending to Alpaca
+- Prevents 400 errors when client_order_id contains special characters (e.g., dashes, spaces, or unicode in the `gr-{paper_id}-{event[:1]}-{timestamp}` format)
+
+**Files changed:** `backend/services/alpaca_broker.py`
+
+---
+
 # Release Notes — May 20, 2026
 
 ## PDT Protection Fix + Underlying Conflict Resolution

@@ -10,6 +10,7 @@ import math as _math
 import time as _time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
+from urllib.parse import quote
 
 import httpx
 from zoneinfo import ZoneInfo
@@ -116,7 +117,9 @@ class AlpacaBroker:
         return self._get(f"/v2/orders/{order_id}")
 
     def get_order_by_client_id(self, client_order_id: str) -> Dict[str, Any]:
-        return self._get(f"/v2/orders:by_client_order_id?client_order_id={client_order_id}")
+        # URL-encode the client_order_id to handle any special characters safely
+        encoded_id = quote(client_order_id, safe="")
+        return self._get(f"/v2/orders:by_client_order_id?client_order_id={encoded_id}")
 
     def modify_order(
         self,
@@ -287,10 +290,25 @@ def _is_extended_hours_now(config=None) -> bool:
 # ── Circuit breakers ──────────────────────────────────────────────────────────
 
 def _get_alpaca_live_open_exposure(broker: "AlpacaBroker") -> Optional[float]:
-    """Sum |market_value| of all open live positions. Returns None on error."""
+    """Return net open exposure for live positions.
+
+    LONG and SHORT positions offset each other — the larger side drives risk.
+    E.g., a $15k LONG and $10k SHORT have $15k net exposure (not $25k gross).
+    Returns None on error.
+    """
     try:
         positions = broker.get_positions()
-        return sum(abs(float(p.get("market_value") or 0)) for p in positions)
+        long_exposure = 0.0
+        short_exposure = 0.0
+        for p in positions:
+            mv = float(p.get("market_value") or 0)
+            side = str(p.get("side") or "").lower()
+            if side == "long":
+                long_exposure += mv
+            elif side == "short":
+                short_exposure += mv
+        # Net exposure = max(long, short) — the larger side drives risk
+        return max(long_exposure, short_exposure)
     except Exception as exc:
         print(f"[alpaca] could not fetch live positions for exposure check: {exc}")
         return None
@@ -311,12 +329,13 @@ def _get_alpaca_live_daily_pnl(broker: "AlpacaBroker") -> Optional[float]:
 def _get_alpaca_live_recent_pnls(db, n: int) -> Optional[List[float]]:
     """Return P&L for the last n completed live round-trips from AlpacaOrder records.
 
-    Returns None on error (caller skips the check). Returns a short list if
-    fewer than n round-trips have been completed — the caller handles that.
+    Only looks at fills from the last 30 days to keep the query small and
+    focused on recent performance. Returns None on error (caller skips the check).
     """
     from database.models import AlpacaOrder
 
     _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    _cutoff = datetime.now(timezone.utc)
     try:
         orders = (
             db.query(AlpacaOrder)
@@ -326,7 +345,10 @@ def _get_alpaca_live_recent_pnls(db, n: int) -> Optional[List[float]]:
                 AlpacaOrder.filled_avg_price.isnot(None),
                 AlpacaOrder.filled_qty.isnot(None),
                 AlpacaOrder.paper_trade_id.isnot(None),
+                AlpacaOrder.filled_at >= _cutoff,
             )
+            .order_by(AlpacaOrder.filled_at.desc())
+            .limit(n * 4)  # fetch extra to account for incomplete round-trips
             .all()
         )
         by_trade: Dict[int, List] = {}
@@ -1092,7 +1114,11 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
                     open_raw_context["high_conviction_pdt_override"] = True
                 print(f"[alpaca] HIGH conviction override — bypassing PDT gate for {symbol} ({event})")
             else:
-                side_hint = "sell" if (event == "close" and _is_direct_short(paper_trade)) else ("buy" if event == "open" else "sell")
+                # For close events: direct short means buy-to-cover, everything else is sell
+                if event == "close":
+                    side_hint = "buy" if direct_short else "sell"
+                else:
+                    side_hint = "buy" if not direct_short else "sell"
                 _record_alpaca_order_skip(
                     db,
                     paper_id,
