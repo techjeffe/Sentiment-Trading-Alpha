@@ -11,7 +11,7 @@ import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple, Callable, Awaitable
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -1473,6 +1473,69 @@ async def analyze_market(
 async def get_paper_trading_summary(db: Session = Depends(get_db)):
     from services.paper_trading import get_summary
     return get_summary(db)
+
+
+@router.get("/paper-trading/closed-trades", tags=["Paper Trading"])
+async def get_paginated_closed_trades(
+    offset: int = Query(default=0, ge=0, description="Number of trades to skip"),
+    limit: int = Query(default=20, ge=1, le=100, description="Max trades to return"),
+    db: Session = Depends(get_db),
+):
+    """Return older closed trades for pagination. Trades older than those returned by /summary."""
+    from database.models import PaperTrade
+    from services.paper_trading import _safe_utc, _utc_iso, _directional_pnl, _directional_return_pct
+    from datetime import timedelta
+
+    now_utc = _safe_utc(datetime.now(timezone.utc))
+    cutoff_date = now_utc - timedelta(days=4)
+
+    # Get the oldest trade from the "last 4 days" set (the one with the most recent exited_at that's still >= cutoff)
+    # Then skip `offset` more trades and return `limit` additional trades
+    base_query = db.query(PaperTrade).filter(
+        PaperTrade.exited_at.isnot(None),
+        PaperTrade.exited_at < cutoff_date,
+    ).order_by(PaperTrade.exited_at.desc())
+
+    # Skip offset trades
+    trades = base_query.offset(offset).limit(limit).all()
+
+    closed_trades = []
+    for t in trades:
+        pnl = _directional_pnl(t.signal_type, t.entry_price, float(t.exit_price or t.entry_price), t.amount)
+        pnl_pct = _directional_return_pct(t.signal_type, t.entry_price, float(t.exit_price or t.entry_price))
+        closed_trades.append({
+            "id": t.id,
+            "underlying": t.underlying,
+            "execution_ticker": t.execution_ticker,
+            "signal_type": t.signal_type,
+            "leverage": t.leverage,
+            "amount": t.amount,
+            "shares": t.shares,
+            "entry_price": t.entry_price,
+            "exit_price": t.exit_price,
+            "entered_at": _utc_iso(t.entered_at),
+            "exited_at": _utc_iso(t.exited_at),
+            "realized_pnl": round(pnl, 4),
+            "realized_pnl_pct": round(pnl_pct, 4),
+            "market_session": t.market_session,
+            "conviction_level": t.conviction_level,
+            "trading_type": t.trading_type,
+            "holding_period_hours": t.holding_period_hours,
+            "close_reason": t.close_reason,
+        })
+
+    # Also return total count of older trades for UI
+    total_count = db.query(PaperTrade).filter(
+        PaperTrade.exited_at.isnot(None),
+        PaperTrade.exited_at < cutoff_date,
+    ).count()
+
+    return {
+        "closed_trades": closed_trades,
+        "total_available": total_count,
+        "offset": offset,
+        "limit": limit,
+    }
 
 
 @router.post("/paper-trading/expire-check", tags=["Paper Trading"])

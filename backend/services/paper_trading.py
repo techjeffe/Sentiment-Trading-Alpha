@@ -1436,9 +1436,16 @@ def get_summary(db) -> Dict[str, Any]:
             "underlying": t.underlying,
         })
 
+    # Filter closed trades to last 4 days for the main display
+    now_utc = _safe_utc(datetime.now(timezone.utc))
+    cutoff_date = now_utc - timedelta(days=4)
+
     closed_trades = []
     for item in reversed(closed_metrics):
         t = item["trade"]
+        exited = _safe_utc(t.exited_at)
+        if exited is not None and exited < cutoff_date:
+            continue
         closed_trades.append({
             "id": t.id,
             "underlying": t.underlying,

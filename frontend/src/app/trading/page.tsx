@@ -444,10 +444,79 @@ export default function TradingPage() {
     const [livePrices, setLivePrices] = useState<Record<string, any>>({});
     const [liveSummary, setLiveSummary] = useState<any>(null);
 
+    // Closed trades pagination (older trades beyond the initial 4-day window)
+    const [olderTrades, setOlderTrades] = useState<ClosedTrade[]>([]);
+    const [olderTradesOffset, setOlderTradesOffset] = useState(0);
+    const [loadingOlder, setLoadingOlder] = useState(false);
+    const [totalOlderAvailable, setTotalOlderAvailable] = useState<number | null>(null);
+    const [olderTradesLoadingFirst, setOlderTradesLoadingFirst] = useState(false);
+
+    // Live closed trades pagination (older trades beyond the initial 4-day window)
+    const [liveOlderTrades, setLiveOlderTrades] = useState<ClosedTrade[]>([]);
+    const [liveOlderTradesOffset, setLiveOlderTradesOffset] = useState(0);
+    const [loadingLiveOlder, setLoadingLiveOlder] = useState(false);
+    const [liveTotalOlderAvailable, setLiveTotalOlderAvailable] = useState<number | null>(null);
+    const [liveOlderTradesLoadingFirst, setLiveOlderTradesLoadingFirst] = useState(false);
+
+    const loadOlderTrades = useCallback(async () => {
+        try {
+            setOlderTradesLoadingFirst(true); // Hide button while loading
+            setLoadingOlder(true);
+            const res = await fetch(
+                `/api/paper-trading/closed-trades?offset=${olderTradesOffset}&limit=20`,
+                { cache: "no-store" }
+            );
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            const trades = json.closed_trades || [];
+            if (trades.length > 0) {
+                setOlderTrades(prev => [...prev, ...trades]);
+                setTotalOlderAvailable(json.total_available ?? null);
+                setOlderTradesOffset(prev => prev + 20);
+            }
+            // If no trades returned, hide the button (no more older trades)
+            setOlderTradesLoadingFirst(false);
+        } catch (e) {
+            console.error("Failed to load older closed trades:", e);
+            setOlderTradesLoadingFirst(false);
+        } finally {
+            setLoadingOlder(false);
+        }
+    }, [olderTradesOffset]);
+
+    const loadLiveOlderTrades = useCallback(async () => {
+        try {
+            setLiveOlderTradesLoadingFirst(true);
+            setLoadingLiveOlder(true);
+            const res = await fetch(
+                `/api/alpaca/closed-trades?offset=${liveOlderTradesOffset}&limit=20`,
+                { cache: "no-store" }
+            );
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            const trades: ClosedTrade[] = json.closed_trades || [];
+            if (trades.length > 0) {
+                setLiveOlderTrades(prev => [...prev, ...trades]);
+                setLiveTotalOlderAvailable(json.total_available ?? null);
+                setLiveOlderTradesOffset(prev => prev + 20);
+            }
+            setLiveOlderTradesLoadingFirst(false);
+        } catch (e) {
+            console.error("Failed to load older live closed trades:", e);
+            setLiveOlderTradesLoadingFirst(false);
+        } finally {
+            setLoadingLiveOlder(false);
+        }
+    }, [liveOlderTradesOffset]);
+
     const load = useCallback(async () => {
         try {
             setLoading(true);
             setError(null);
+            // Reset pagination state when reloading main data
+            setOlderTrades([]);
+            setOlderTradesOffset(0);
+            setTotalOlderAvailable(null);
             const paperTradingResponse = await fetch("/api/paper-trading", { cache: "no-store" });
             if (!paperTradingResponse.ok) throw new Error(`HTTP ${paperTradingResponse.status}`);
             setData(await paperTradingResponse.json());
@@ -981,7 +1050,9 @@ export default function TradingPage() {
                                     <div className="px-5 py-4 border-b border-white/8 flex items-center gap-2">
                                         <DollarSign size={14} className="text-slate-400" />
                                         <p className="text-sm font-semibold text-white">Live Closed Trades</p>
-                                        <span className="ml-auto text-[10px] text-slate-500">{liveClosedRows.length} trade{liveClosedRows.length !== 1 ? "s" : ""}</span>
+                                        <span className="ml-auto text-[10px] text-slate-500">
+                                            {liveClosedRows.length} trade{liveClosedRows.length !== 1 ? "s" : ""}
+                                        </span>
                                     </div>
                                     {liveClosedRows.length > 0 ? (
                                         <div className="overflow-x-auto">
@@ -1017,6 +1088,27 @@ export default function TradingPage() {
                                     ) : (
                                         <div className="px-5 py-6 flex items-center gap-3 text-slate-500 text-sm">
                                             <Minus size={16} /> No closed live trades yet
+                                        </div>
+                                    )}
+                                    {/* Show More button for older live trades */}
+                                    {liveClosedRows.length > 0 && !liveOlderTradesLoadingFirst && (
+                                        <div className="px-5 py-4 border-t border-white/6 flex justify-center">
+                                            <button
+                                                type="button"
+                                                onClick={loadLiveOlderTrades}
+                                                disabled={loadingLiveOlder}
+                                                className="inline-flex items-center gap-2 rounded-lg border border-rose-700/40 bg-rose-900/20 px-4 py-2 text-xs font-medium text-rose-300 hover:text-rose-100 hover:bg-rose-800/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                {loadingLiveOlder ? (
+                                                    <>
+                                                        <RefreshCw size={12} className="animate-spin" /> Loading...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        Show More Older Trades
+                                                    </>
+                                                )}
+                                            </button>
                                         </div>
                                     )}
                                 </div>
@@ -1266,12 +1358,17 @@ export default function TradingPage() {
                         )}
 
                         {/* Closed trades */}
-                        {data.closed_trades.length > 0 && (
+                        {(data.closed_trades.length > 0 || olderTrades.length > 0) && (
                             <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: "rgba(30,41,59,0.7)" }}>
                                 <div className="px-5 py-4 border-b border-white/8 flex items-center gap-2">
                                     <DollarSign size={14} className="text-slate-400" />
                                     <p className="text-sm font-semibold text-white">Strategy Paper Closed Trades</p>
-                                    <span className="ml-auto text-[10px] text-slate-500">{data.closed_trades.length} trades</span>
+                                    <span className="ml-auto text-[10px] text-slate-500">
+                                        {data.closed_trades.length + olderTrades.length} trades
+                                        {totalOlderAvailable != null && (
+                                            <span className="ml-1">({totalOlderAvailable} older available)</span>
+                                        )}
+                                    </span>
                                 </div>
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-xs">
@@ -1288,7 +1385,7 @@ export default function TradingPage() {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {data.closed_trades.map((trade) => (
+                                            {[...data.closed_trades, ...olderTrades].map((trade) => (
                                                 <tr key={trade.id} className="border-b border-white/4 hover:bg-white/4 transition-colors">
                                                     <td className="px-4 py-3 font-semibold text-white">
                                                         {trade.execution_ticker}
@@ -1310,10 +1407,31 @@ export default function TradingPage() {
                                         </tbody>
                                     </table>
                                 </div>
+                                {/* Show More button — always show when there are trades, hide when API returns empty */}
+                                {data.closed_trades.length > 0 && !olderTradesLoadingFirst && (
+                                    <div className="px-5 py-4 border-t border-white/6 flex justify-center">
+                                        <button
+                                            type="button"
+                                            onClick={loadOlderTrades}
+                                            disabled={loadingOlder}
+                                            className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-800/60 px-4 py-2 text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {loadingOlder ? (
+                                                <>
+                                                    <RefreshCw size={12} className="animate-spin" /> Loading...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    Show More Older Trades
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         )}
 
-                        {data.closed_trades.length === 0 && (
+                        {data.closed_trades.length === 0 && olderTrades.length === 0 && (
                             <div className="rounded-xl border border-white/8 px-5 py-6 flex items-center gap-3 text-slate-500 text-sm" style={{ background: "rgba(30,41,59,0.7)" }}>
                                 <Minus size={16} /> No closed trades yet &mdash; trades close when the signal changes or flips direction
                             </div>

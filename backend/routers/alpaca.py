@@ -2,6 +2,7 @@
 Alpaca brokerage admin routes.
 All routes require the admin token (if ADMIN_API_TOKEN is set).
 """
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -640,4 +641,82 @@ async def get_alpaca_live_summary(
         "win_rate": round(win_rate, 1),
         "total_trades": total_trades,
         "closed_trades": closed_trades_list,
+    }
+
+
+# ── Paginated closed trades (older than 4 days) ────────────────────────────────
+
+@router.get("/closed-trades")
+async def get_paginated_alpaca_closed_trades(
+    offset: int = Query(default=0, ge=0, description="Number of trades to skip"),
+    limit: int = Query(default=20, ge=1, le=100, description="Max trades to return"),
+    _admin: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    """Return older Alpaca closed trades for pagination. Trades older than those returned by /live-summary."""
+    from database.models import AlpacaOrder
+    from datetime import timedelta, timezone
+
+    now_utc = datetime.now(timezone.utc)
+    cutoff_date = now_utc - timedelta(days=4)
+    _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+    # Fetch all filled live orders older than 4 days
+    all_old_orders = (
+        db.query(AlpacaOrder)
+        .filter(
+            AlpacaOrder.trading_mode == "live",
+            AlpacaOrder.status == "filled",
+            AlpacaOrder.filled_avg_price.isnot(None),
+            AlpacaOrder.filled_qty.isnot(None),
+            AlpacaOrder.filled_at.isnot(None),
+            AlpacaOrder.filled_at < cutoff_date,
+        )
+        .order_by(AlpacaOrder.filled_at.desc())
+        .all()
+    )
+
+    # Group by paper_trade_id to match buy/sell for round-trip P&L
+    by_trade: Dict[int, List] = {}
+    for o in all_old_orders:
+        ptid = o.paper_trade_id
+        if ptid is not None:
+            by_trade.setdefault(ptid, []).append(o)
+
+    # Count completed round-trips (must have both buy and sell)
+    round_trip_count = sum(1 for orders in by_trade.values() if any(o.side == "buy" for o in orders) and any(o.side == "sell" for o in orders))
+
+    # Build closed trades list
+    closed_trades = []
+    for trade_orders in by_trade.values():
+        buys = [o for o in trade_orders if o.side == "buy"]
+        sells = [o for o in trade_orders if o.side == "sell"]
+        if not buys or not sells:
+            continue
+        buy = max(buys, key=lambda o: o.filled_at or _epoch)
+        sell = max(sells, key=lambda o: o.filled_at or _epoch)
+        if not buy.filled_avg_price or not sell.filled_avg_price:
+            continue
+        qty = min(float(buy.filled_qty or 0), float(sell.filled_qty or 0))
+        if qty <= 0:
+            continue
+        pnl = (float(sell.filled_avg_price) - float(buy.filled_avg_price)) * qty
+        closed_trades.append({
+            "id": buy.id,
+            "symbol": buy.symbol,
+            "buy_price": float(buy.filled_avg_price),
+            "sell_price": float(sell.filled_avg_price),
+            "qty": qty,
+            "pnl": round(pnl, 4),
+            "closed_at": sell.filled_at.isoformat() if sell.filled_at else None,
+        })
+
+    # Sort newest first
+    closed_trades.sort(key=lambda t: t["closed_at"] or "", reverse=True)
+
+    return {
+        "closed_trades": closed_trades[offset:offset + limit],
+        "total_available": round_trip_count,
+        "offset": offset,
+        "limit": limit,
     }
