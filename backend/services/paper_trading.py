@@ -529,7 +529,7 @@ def close_expired_positions(db, alpaca_pending: Optional[list] = None) -> List[D
             # _window_active() returning True so trailing-stop logic still works.
             pos.best_price_seen = best
             pos.trailing_stop_price = new_stop
-            pos.holding_window_until = now + timedelta(days=999)  # effectively permanent
+            pos.holding_window_until = now_utc + timedelta(days=999)  # effectively permanent
             closed.append({
                 "underlying": pos.underlying,
                 "execution_ticker": pos.execution_ticker,
@@ -540,7 +540,7 @@ def close_expired_positions(db, alpaca_pending: Optional[list] = None) -> List[D
                 "trailing_stop_price": new_stop,
             })
         else:
-            _close_position(pos, exit_price, now, db, reason="window_expired")
+            _close_position(pos, exit_price, now_utc, db, reason="window_expired")
             if alpaca_pending is not None:
                 alpaca_pending.append((pos, "close"))
             closed.append({
