@@ -1143,6 +1143,35 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
             )
             return
 
+        # ── Minimum notional guard (skip dust closes) ─────────────────────
+        # If the paper position is worth less than $1.00, skip the Alpaca close.
+        # Prevents sub-penny "dust" orders that waste API calls and clutter
+        # the order history. The dust is an acceptable loss in the paper
+        # simulator; real accounts may still have dust from partial fills.
+        _min_close_notional = float(getattr(config, "alpaca_min_close_notional", 1.0))
+        if shares > 0 and entry_price > 0:
+            _notional = shares * entry_price
+        elif notional > 0:
+            _notional = notional
+        else:
+            _notional = 0.0
+        if _notional > 0 and _notional < _min_close_notional:
+            print(
+                f"[alpaca] skipping close for {symbol} (paper_id={paper_id}): "
+                f"notional ${_notional:.4f} < ${_min_close_notional:.2f} threshold (dust)"
+            )
+            # Record as intentionally skipped for audit trail
+            _record_alpaca_order_skip(
+                db,
+                paper_id,
+                "sell" if not direct_short else "buy",
+                symbol,
+                None,
+                broker.mode,
+                f"below_min_notional(${_notional:.4f} < ${_min_close_notional:.2f})",
+            )
+            return
+
         # ── Full position close via Alpaca's endpoint ──
         # Uses close_position() which tells Alpaca to sell the EXACT remaining
         # quantity including any residual dust (e.g., 0.00003 shares from

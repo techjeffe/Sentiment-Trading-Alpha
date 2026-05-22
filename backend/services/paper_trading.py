@@ -12,11 +12,19 @@ Position lifecycle (mirrors what a real trader following every signal would do):
 
 from datetime import datetime, timedelta, time as time_cls, timezone
 from zoneinfo import ZoneInfo
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 from config.logic_loader import LOGIC as _L
 
 _MARKET_TZ = ZoneInfo("America/New_York")
+
+# ── OVERLAP COOLDOWN TRACKING (module-level, persists across runs) ────
+# _cron_overlap_keys[(underlying, signal_type)] = utc datetime
+#   Prevents duplicate orders when multiple analysis runs fire simultaneously.
+# _last_order_times[symbol] = utc datetime
+#   Prevents manual+auto duplicate orders for the same symbol.
+_cron_overlap_keys: Dict[Tuple[str, str], datetime] = {}
+_last_order_times: Dict[str, datetime] = {}
 
 # 24/5 trading schedule (Alpaca: Sun 8 PM ET → Fri 8 PM ET)
 _OVERNIGHT_OPEN  = time_cls(20, 0)   # 8:00 PM ET — overnight session start
@@ -606,6 +614,43 @@ def process_signals(
     # positions from accumulating across weekend/overnight runs.
     now = datetime.now(timezone.utc)
     _resolve_underlying_conflicts(db, quotes_by_symbol, now, _alpaca_pending)
+
+    # ── INTRA-RUN CONFLICT RESOLUTION ─────────────────────────────────────
+    # Detect opposing signals (LONG + SHORT) for the same underlying within
+    # this same analysis run BEFORE any new positions are created. Multiple
+    # concurrent analysis runs may have already populated _alpaca_pending with
+    # conflicting PaperTrade records; we also detect signals against each other
+    # to prevent the case where Run A opens LONG and Run B opens SHORT for the
+    # same underlying in the same dispatch cycle.
+    _signals_by_underlying: Dict[str, List[Dict[str, Any]]] = {}
+    for rec in recommendations:
+        _rec_underlying = str(rec.get("underlying") or rec.get("symbol") or "").upper()
+        if not _rec_underlying:
+            continue
+        _signals_by_underlying.setdefault(_rec_underlying, []).append(rec)
+
+    _opposing_underlyings: set = set()
+    for _rec_underlying, _sigs in _signals_by_underlying.items():
+        _has_long = any(str(s.get("signal_type") or "HOLD").upper() == "LONG" for s in _sigs)
+        _has_short = any(str(s.get("signal_type") or "HOLD").upper() == "SHORT" for s in _sigs)
+        if _has_long and _has_short:
+            _opposing_underlyings.add(_rec_underlying)
+            print(
+                f"[paper] INTRA-RUN CONFLICT: opposing signals for {_rec_underlying} "
+                f"(LONG + SHORT) — keeping LONG, blocking SHORT"
+            )
+
+    # Filter out SHORT signals for underlyings that also have LONG signals
+    _filtered_recommendations = []
+    for rec in recommendations:
+        _rec_underlying = str(rec.get("underlying") or rec.get("symbol") or "").upper()
+        _signal_type = str(rec.get("signal_type") or "HOLD").upper()
+        if _rec_underlying in _opposing_underlyings and _signal_type == "SHORT":
+            print(f"[paper] BLOCKED: SHORT signal for {_rec_underlying} due to intra-run conflict")
+            continue
+        _filtered_recommendations.append(rec)
+
+    recommendations = _filtered_recommendations
     # ─────────────────────────────────────────────────────────────────────────────
 
     # Always check for expired windows first, even if market is closed.
@@ -664,6 +709,40 @@ def process_signals(
 
         if not underlying:
             continue
+
+        # ── CRON OVERLAP GUARD ──────────────────────────────────────────
+        # Prevents duplicate orders when multiple analysis runs fire
+        # simultaneously (cron overlap).  Dedup key is (underlying,
+        # normalized_signal) so that only the FIRST run for this signal
+        # type creates the PaperTrade; subsequent runs within the grace
+        # window skip silently.
+        #
+        # Direction flips (LONG↔SHORT) are NOT blocked — only identical
+        # signal types collide.  HOLD signals are also tracked separately
+        # so a HOLD doesn't block a directional entry and vice versa.
+        _OVERLAP_GRACE_MINUTES = 5
+        _now_utc = _safe_utc(datetime.now(timezone.utc))
+        _overlap_key = (underlying, signal_type)
+        _prev = _cron_overlap_keys.get(_overlap_key)
+        if _prev is not None and _now_utc < _prev + timedelta(minutes=_OVERLAP_GRACE_MINUTES):
+            _skip_summary = {
+                "underlying": underlying,
+                "execution_ticker": execution_ticker,
+                "signal_type": signal_type,
+                "leverage": leverage,
+                "conviction_level": conviction_level,
+                "trading_type": trading_type,
+                "session": session["label"],
+                "action": "skipped",
+                "reason": "cron_overlap_guard",
+            }
+            print(
+                f"[paper] {underlying} {signal_type}: skipped — cron overlap guard "
+                f"(same signal within {_OVERLAP_GRACE_MINUTES}min)"
+            )
+            actions.append(_skip_summary)
+            continue
+        _cron_overlap_keys[_overlap_key] = _now_utc
 
         price_data = quotes_by_symbol.get(execution_ticker) or quotes_by_symbol.get(underlying) or {}
         entry_price = float(price_data.get("current_price") or price_data.get("price") or 0.0)
@@ -1062,12 +1141,18 @@ def process_signals(
         _size_pct = float(rec.get("size_pct", "100.0") or "100.0") / 100.0
         _amount *= _size_pct
 
-        # Apply ramp stage cap (probe=25%, building=60%, full=100%)
-        _ramp_stage_entry = str(rec.get("ramp_stage") or "probe")
-        _ramp_cap = {"probe": 0.25, "building": 0.60, "full": 1.0}.get(_ramp_stage_entry, 1.0)
-        _amount *= _ramp_cap
+        # ── Minimum initial entry floor ─────────────────────────────
+        # The initial entry must be at least 25% of the base amount to
+        # avoid wasting fees on sub-penny dust positions.  Ramp stage
+        # controls accumulation (how much you add on), NOT the first
+        # entry.  Only apply ramp_cap when we are adding to an existing
+        # position (handled in the accumulation block below).
+        _MIN_INITIAL_ENTRY_PCT = 0.25
+        _min_initial = _base_amount * _MIN_INITIAL_ENTRY_PCT
+        _amount = max(_amount, _min_initial)
 
-        _amount = max(_amount, 1.0)
+        # ── Ramp stage tracking (stored for accumulation logic) ──────
+        _ramp_stage_entry = str(rec.get("ramp_stage") or "full")
 
         if _portfolio_cap is not None:
             _remaining = max(0.0, _portfolio_cap - _open_exposure)
@@ -1275,19 +1360,103 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
     Closes are dispatched FIRST, then opens. This ensures that when a direction
     flip occurs, the old position is fully closed before the new one is opened,
     preventing simultaneous opposing positions in the Alpaca account.
+
+    DEDUPLICATION: When multiple analysis runs fire simultaneously (e.g., cron
+    overlap), they each create independent PaperTrade records that produce
+    identical orders. This function deduplicates by (symbol, event) within the
+    dispatch cycle, keeping only the first occurrence per unique key.
+
+    The deduplication key is (execution_ticker, event) — not trade_id — because
+    duplicate analysis runs produce independent PaperTrade records with the same
+    symbol and event. We keep the first (newest) open and skip later duplicates.
+
+    MANUAL+AUTO COOLDOWN: After ANY order is dispatched for a symbol, skip
+    subsequent orders for the same symbol within _ORDER_COOLDOWN_MINUTES
+    (default: 30). This prevents the auto system from firing a duplicate order
+    shortly after a manual order (or vice versa).
     """
     if not pending or config is None:
         return
     try:
         from services.alpaca_broker import maybe_execute_alpaca_order
-        # Dispatch all closes first
+
+        # ── DEDUPLICATION PASS ──────────────────────────────────────────
+        # Group by (symbol, event) and keep only the first occurrence.
+        # This prevents duplicate orders when multiple analysis runs fire
+        # in the same 30-minute cadence window (or overlap due to slow execution).
+        _ORDER_COOLDOWN_MINUTES = 30
+        _now_utc_dispatch = _safe_utc(datetime.now(timezone.utc))
+
+        seen_keys: Dict[str, tuple] = {}
+        unique_closes: list = []
+        unique_opens: list = []
+
+        # ── MANUAL+AUTO COOLDOWN PASS ───────────────────────────────────
+        # Before dedup, filter out orders that fall within the any-order
+        # cooldown window for the same symbol. This prevents the auto system
+        # from firing a duplicate order shortly after a manual order (or
+        # vice versa).  This is NOT signal-type-specific — if the user
+        # manually bought SPXL 20 minutes ago, the auto system won't buy
+        # SPXL again regardless of signal type.
+        cooldown_filtered: list = []
         for trade, event in pending:
+            symbol = str(
+                getattr(trade, "execution_ticker", "") or
+                getattr(trade, "underlying", "")
+            ).upper()
+            _prev_order = _last_order_times.get(symbol)
+            if _prev_order is not None and _now_utc_dispatch < _prev_order + timedelta(minutes=_ORDER_COOLDOWN_MINUTES):
+                print(
+                    f"[alpaca] COOLDOWN: skipping {event} for {symbol} "
+                    f"(order dispatched {_safe_utc(_prev_order).strftime('%H:%M')} ago, "
+                    f"cooldown={_ORDER_COOLDOWN_MINUTES}min)"
+                )
+                continue
+            cooldown_filtered.append((trade, event))
+
+        # Then deduplicate within the cooldown-filtered list
+
+        for trade, event in pending:
+            symbol = str(
+                getattr(trade, "execution_ticker", "") or
+                getattr(trade, "underlying", "")
+            ).upper()
+            key = f"{symbol}::{event}"
+
+            if key in seen_keys:
+                # Duplicate: skip this trade but preserve it for logging
+                print(
+                    f"[alpaca] DEDUP: skipping duplicate {event} for {symbol} "
+                    f"(trade_id={getattr(trade, 'id', '?')}, "
+                    f"entered={getattr(trade, 'entered_at', '?')})"
+                )
+                continue
+
+            seen_keys[key] = (trade, event)
             if event == "close":
-                maybe_execute_alpaca_order(db, trade, event, config)
-        # Then dispatch all opens
-        for trade, event in pending:
-            if event == "open":
-                maybe_execute_alpaca_order(db, trade, event, config)
+                unique_closes.append((trade, event))
+            else:
+                unique_opens.append((trade, event))
+
+        # ── DISPATCH: closes first, then opens ──────────────────────────
+        for trade, event in unique_closes:
+            maybe_execute_alpaca_order(db, trade, event, config)
+        for trade, event in unique_opens:
+            maybe_execute_alpaca_order(db, trade, event, config)
+
+        # ── RECORD LAST ORDER TIMES ─────────────────────────────────────
+        for trade, event in seen_keys.values():
+            symbol = str(
+                getattr(trade, "execution_ticker", "") or
+                getattr(trade, "underlying", "")
+            ).upper()
+            _last_order_times[symbol] = _now_utc_dispatch
+
+        if len(pending) != len(seen_keys):
+            _dup_count = len(pending) - len(seen_keys)
+            _cooldown_skipped = len(pending) - len(cooldown_filtered)
+            print(f"[alpaca] dedup summary: {len(pending)} total → {len(seen_keys)} unique ({_dup_count} duplicates skipped, {_cooldown_skipped} cooldown skipped)")
+
     except ImportError:
         pass
     except Exception as exc:
