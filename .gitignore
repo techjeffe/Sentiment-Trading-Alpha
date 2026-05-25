@@ -43,12 +43,3 @@ Thumbs.db
 # Private planning docs — not for public repo
 ALPACA_TRADING_PLAN.md
 CLAUDE.md
-.deepsec/.gitignore
-.deepsec/AGENTS.md
-.deepsec/deepsec.config.ts
-.deepsec/package-lock.json
-.deepsec/package.json
-.deepsec/pnpm-workspace.yaml
-.deepsec/README.md
-.deepsec/data/qwen-3.5-9b-getrich/INFO.md
-.deepsec/data/qwen-3.5-9b-getrich/SETUP.md
