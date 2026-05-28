@@ -67,10 +67,10 @@
   "technical_confidence": {
     "_comment": "Modifiers applied to confidence based on technical indicator alignment with signal direction. Each modifier is clamped to ±0.15 total. Positive = boost confidence, negative = reduce confidence.",
     "enabled": true,
-    "rsi_overbought_long_penalty": -0.08,
+    "rsi_overbought_long_penalty": -0.06,
     "rsi_overbought_short_bonus": 0.06,
     "rsi_oversold_long_bonus": 0.06,
-    "rsi_oversold_short_penalty": -0.08,
+    "rsi_oversold_short_penalty": -0.06,
     "golden_cross_long_bonus": 0.05,
     "golden_cross_short_penalty": -0.05,
     "death_cross_long_penalty": -0.05,
@@ -81,10 +81,10 @@
     "macd_negative_short_bonus": 0.04,
     "volume_high_bonus": 0.03,
     "volume_low_penalty": -0.03,
-    "bb_above_upper_long_penalty": -0.05,
+    "bb_above_upper_long_penalty": -0.03,
     "bb_above_upper_short_bonus": 0.03,
     "bb_below_lower_long_bonus": 0.03,
-    "bb_below_lower_short_penalty": -0.05,
+    "bb_below_lower_short_penalty": -0.03,
     "obv_rising_long_bonus": 0.04,
     "obv_rising_short_penalty": -0.04,
     "obv_falling_long_penalty": -0.04,
@@ -116,14 +116,14 @@
       "BROAD": 0.4,
       "UNRELATED": 0.2
     },
-    "bluster_short_threshold": -0.60,
+    "bluster_short_threshold": -0.70,
     "short_directional_blend": {
       "bluster_weight": 0.4,
       "policy_weight": 0.6
     },
     "policy_min_score": 0.40,
-    "policy_signal_threshold": 0.40,
-    "direction_confidence_min": 0.50,
+    "policy_signal_threshold": 0.45,
+    "direction_confidence_min": 0.55,
     "directional_score_min_magnitude": 0.15,
     "impact_severity_high": 0.70,
     "impact_severity_medium": 0.40,
@@ -183,13 +183,21 @@
     "min_decay_factor": 0.10
   },
   "conviction": {
-    "high_score_threshold": 0.6,
-    "high_confidence_threshold": 0.7,
+    "high_score_threshold": 0.5,
+    "high_confidence_threshold": 0.8,
+    "low_directional_threshold": 0.30,
+    "low_confidence_threshold": 0.55,
     "holding_minutes": {
       "SCALP": 120,
       "SWING": 720,
       "POSITION": 4320,
       "VOLATILE_EVENT": 120
+    },
+    "low_holding_minutes": {
+      "SCALP": 60,
+      "SWING": 360,
+      "POSITION": 2160,
+      "VOLATILE_EVENT": 60
     },
     "max_holding_minutes": {
       "SCALP": 360,
@@ -220,8 +228,8 @@
       "keep_floor": 0.08
     },
     "conviction": {
-      "high_score_threshold": 0.5,
-      "high_confidence_threshold": 0.6,
+      "high_score_threshold": 0.4,
+      "high_confidence_threshold": 0.75,
       "holding_minutes": {
         "SCALP": 60,
         "SWING": 360,

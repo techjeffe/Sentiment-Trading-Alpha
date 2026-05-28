@@ -19,6 +19,35 @@ PAPER_BASE = "https://paper-api.alpaca.markets"
 LIVE_BASE  = "https://api.alpaca.markets"
 _ET = ZoneInfo("America/New_York")
 
+# ── Inverse ETF mapping ────────────────────────────────────────────────────────
+# Maps stock/sector tickers to their corresponding inverse ETFs.
+# When a SHORT signal is generated for a stock we can't short, we instead buy
+# the inverse ETF to express the bearish view.
+INVERSE_ETF_MAP: Dict[str, str] = {
+    # Tech / semiconductors
+    "NVDA": "PSQ",
+    "AMD": "PSQ",
+    "SMCI": "PSQ",
+    "AVGO": "PSQ",
+    "INTC": "PSQ",
+    # Broad tech sector
+    "AAPL": "PSQ",
+    "MSFT": "PSQ",
+    "GOOGL": "PSQ",
+    "META": "PSQ",
+    "TSLA": "SQQQ",  # High beta, map to Nasdaq inverse
+    # Crypto-related
+    "COIN": "BITI",
+    "MSTR": "BITI",
+    # Market-beta hedges
+    "SPY": "SPXS",   # 3x daily short S&P 500
+    "QQQ": "SPXS",   # 3x daily short Nasdaq-100 (also covered by SPXS)
+    "DIA": "SPXS",   # 3x daily short Dow
+    # Sector-specific inverses
+    "XLF": "SPXS",   # Financials -> broad market hedge
+    "XLE": "RWM",    # Energy -> Russell 2000 inverse
+}
+
 _TERMINAL_STATUSES = frozenset({"filled", "cancelled", "expired", "rejected", "error"})
 
 
@@ -652,10 +681,17 @@ def _get_live_symbol_position(broker: "AlpacaBroker", symbol: str) -> Optional[D
 
 
 def _configured_live_execution_symbols(config) -> Set[str]:
-    """Return execution tickers this app is allowed to trade for the current config."""
+    """Return execution tickers this app is allowed to trade for the current config.
+
+    Includes tracked symbols, custom symbols, and all inverse ETFs from the
+    mapping so SHORT signals can be routed to them.
+    """
     from services.trading_instruments import INSTRUMENT_SPECS
 
     allowed: Set[str] = set()
+
+    # Always include inverse ETFs so SHORT→inverse mapping works
+    allowed.update(INVERSE_ETF_MAP.values())
 
     tracked_symbols = getattr(config, "tracked_symbols", None) or ["USO", "IBIT", "QQQ", "SPY"]
     for raw_symbol in tracked_symbols:
@@ -684,13 +720,28 @@ def _configured_live_execution_symbols(config) -> Set[str]:
 
 
 def _is_live_symbol_configured(config, paper_trade) -> bool:
-    """Return True when this trade resolves to a symbol the user has configured."""
+    """Return True when this trade resolves to a symbol the user has configured.
+
+    For SHORT signals where execution_ticker == underlying (no ETF mapped),
+    also check if an inverse ETF exists in the mapping — those will be
+    allowed through and executed as inverse ETF buys.
+    """
     symbol = str(getattr(paper_trade, "execution_ticker", "") or getattr(paper_trade, "underlying", "")).upper().strip()
     underlying = str(getattr(paper_trade, "underlying", "") or "").upper().strip()
     if not symbol and not underlying:
         return False
     allowed = _configured_live_execution_symbols(config)
-    return bool(symbol and symbol in allowed) or bool(underlying and underlying in allowed)
+    if symbol and symbol in allowed:
+        return True
+    if underlying and underlying in allowed:
+        return True
+    # Allow inverse ETFs for SHORT signals even if the ETF itself isn't in tracked symbols
+    if symbol and symbol.upper() == underlying.upper():
+        # Direct short — check if an inverse ETF is mapped
+        inverse_etf = INVERSE_ETF_MAP.get(symbol)
+        if inverse_etf and inverse_etf in allowed:
+            return True
+    return False
 
 
 def _alpaca_order_effective_qty(order) -> float:
@@ -1039,14 +1090,28 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
 
         if direct_short:
             if not allow_short:
-                print(f"[alpaca] skipping direct short on {symbol}: alpaca_allow_short_selling disabled")
-                _record_alpaca_order_error(
-                    db, paper_id, "sell", symbol, notional,
-                    f"short selling disabled; no inverse ETF mapped for {symbol}",
-                    broker.mode,
-                )
-                return
-            side = "sell"   # real Alpaca short-sell
+                # ── Map to inverse ETF ────────────────────────────────────
+                # Look up the underlying ticker in the inverse ETF map.
+                # If found, buy the inverse ETF instead of shorting the stock.
+                underlying_ticker = str(getattr(paper_trade, "underlying", symbol)).upper()
+                inverse_etf = INVERSE_ETF_MAP.get(underlying_ticker)
+                if inverse_etf:
+                    symbol = inverse_etf
+                    side = "buy"
+                    print(
+                        f"[alpaca] SHORT→inverse ETF: {underlying_ticker} → buying {inverse_etf} "
+                        f"(${notional:.2f}, paper_id={paper_id})"
+                    )
+                else:
+                    print(f"[alpaca] skipping direct short on {symbol}: alpaca_allow_short_selling disabled")
+                    _record_alpaca_order_error(
+                        db, paper_id, "sell", symbol, notional,
+                        f"short selling disabled; no inverse ETF mapped for {symbol}",
+                        broker.mode,
+                    )
+                    return
+            else:
+                side = "sell"   # real Alpaca short-sell
         else:
             side = "buy"    # long, or buying the inverse ETF for a short signal
 
@@ -1176,23 +1241,69 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
         # Uses close_position() which tells Alpaca to sell the EXACT remaining
         # quantity including any residual dust (e.g., 0.00003 shares from
         # partial fills). This is safer than computing a qty ourselves.
-        try:
-            response = broker.close_position(symbol)
-            _record_alpaca_order(
-                db, paper_id, side, symbol, None, None,
-                response, broker.mode, False, None, None,
-            )
-            print(
-                f"[alpaca] close {side} {symbol}: "
-                f"order_id={response.get('id')} status={response.get('status')} "
-                f"qty={response.get('qty')} filled_qty={response.get('filled_qty')}"
-            )
-        except Exception as exc:
-            _record_alpaca_order_error(
-                db, paper_id, side, symbol, None,
-                str(exc), broker.mode,
-            )
-            print(f"[alpaca] close failed for {symbol} (non-fatal): {exc}")
+        _try_close = True
+        _close_attempt = 0
+        while _try_close:
+            _close_attempt += 1
+            try:
+                response = broker.close_position(symbol)
+                _record_alpaca_order(
+                    db, paper_id, side, symbol, None, None,
+                    response, broker.mode, False, None, None,
+                )
+                _close_log = f"[alpaca] close {side} {symbol}: "
+                if _close_attempt > 1:
+                    _close_log += f"[RETRY-{_close_attempt}] "
+                _close_log += (
+                    f"order_id={response.get('id')} status={response.get('status')} "
+                    f"qty={response.get('qty')} filled_qty={response.get('filled_qty')}"
+                )
+                print(_close_log)
+                break
+            except Exception as exc:
+                if _close_attempt >= 2:
+                    _record_alpaca_order_error(
+                        db, paper_id, side, symbol, None,
+                        f"{str(exc)} (after {_close_attempt} attempts)", broker.mode,
+                    )
+                    # Decision log fallback
+                    try:
+                        from database.engine import DecisionLogSessionLocal
+                        from database.models import DecisionLogTrade
+                        from services.decision_logger import logger as _dl
+                        _ddb = DecisionLogSessionLocal()
+                        try:
+                            _trade_log = _ddb.query(DecisionLogTrade).filter(
+                                DecisionLogTrade.paper_trade_id == paper_id
+                            ).first()
+                            if _trade_log:
+                                _dl.log_trade_event(
+                                    _ddb,
+                                    trade_log_id=_trade_log.id,
+                                    event_type="execution_failed",
+                                    run_id=None,
+                                    keep_vs_close="close",
+                                    decision_reason=f"Alpaca close failed after {_close_attempt} attempts: {exc}",
+                                    event_details={
+                                        "symbol": symbol,
+                                        "side": side,
+                                        "attempts": _close_attempt,
+                                        "error": str(exc),
+                                    },
+                                )
+                                _ddb.commit()
+                        except Exception as _dlx:
+                            _ddb.rollback()
+                            print(f"[decision-log] close fallback error: {_dlx}")
+                        finally:
+                            _ddb.close()
+                    except Exception as _dlx:
+                        print(f"[decision-log] close fallback error (non-fatal): {_dlx}")
+                    print(f"[alpaca] close FAILED after {_close_attempt} attempts for {symbol}: {exc}")
+                    _try_close = False
+                else:
+                    print(f"[alpaca] close failed on attempt {_close_attempt} for {symbol}: {exc} — retrying...")
+                    _time.sleep(2)
         return
 
     # ── Build order parameters ───────────────────────────────────────────────
@@ -1238,34 +1349,85 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
 
     client_order_id = f"gr-{paper_id}-{event[:1]}-{int(_time.time())}"
 
-    try:
-        response = broker.place_order(
-            symbol          = symbol,
-            side            = side,
-            notional        = use_notional,
-            qty             = qty,
-            order_type      = order_type,
-            time_in_force   = time_in_force,
-            limit_price     = limit_price,
-            extended_hours  = ext_hours,
-            client_order_id = client_order_id,
-        )
-        _record_alpaca_order(
-            db, paper_id, side, symbol, use_notional, qty,
-            response, broker.mode, ext_hours, limit_price, open_raw_context,
-        )
-        print(
-            f"[alpaca] {event} {side} {symbol}: "
-            f"order_id={response.get('id')} status={response.get('status')} "
-            f"qty={response.get('qty')} filled_qty={response.get('filled_qty')} "
-            f"filled_avg_price={response.get('filled_avg_price')}"
-        )
-    except Exception as exc:
-        _record_alpaca_order_error(
-            db, paper_id, side, symbol, use_notional or notional,
-            str(exc), broker.mode, client_order_id,
-        )
-        print(f"[alpaca] order failed (non-fatal): {exc}")
+    _try_exec_order = True
+    _attempt = 0
+    _last_error = None
+    while _try_exec_order:
+        _attempt += 1
+        try:
+            response = broker.place_order(
+                symbol          = symbol,
+                side            = side,
+                notional        = use_notional,
+                qty             = qty,
+                order_type      = order_type,
+                time_in_force   = time_in_force,
+                limit_price     = limit_price,
+                extended_hours  = ext_hours,
+                client_order_id = client_order_id,
+            )
+            _record_alpaca_order(
+                db, paper_id, side, symbol, use_notional, qty,
+                response, broker.mode, ext_hours, limit_price, open_raw_context,
+            )
+            _log_msg = f"[alpaca] {event} {side} {symbol}: "
+            if _attempt > 1:
+                _log_msg += f"[RETRY-{_attempt}] "
+            _log_msg += (
+                f"order_id={response.get('id')} status={response.get('status')} "
+                f"qty={response.get('qty')} filled_qty={response.get('filled_qty')} "
+                f"filled_avg_price={response.get('filled_avg_price')}"
+            )
+            print(_log_msg)
+            break
+        except Exception as exc:
+            _last_error = exc
+            if _attempt >= 2:
+                # Exhausted retries — log to decision log
+                _record_alpaca_order_error(
+                    db, paper_id, side, symbol, use_notional or notional,
+                    f"{str(exc)} (after {_attempt} attempts)", broker.mode, client_order_id,
+                )
+                # Decision log fallback
+                try:
+                    from database.engine import DecisionLogSessionLocal
+                    from database.models import DecisionLogTrade
+                    from services.decision_logger import logger as _dl
+                    _ddb = DecisionLogSessionLocal()
+                    try:
+                        _trade_log = _ddb.query(DecisionLogTrade).filter(
+                            DecisionLogTrade.paper_trade_id == paper_id
+                        ).first()
+                        if _trade_log:
+                            _dl.log_trade_event(
+                                _ddb,
+                                trade_log_id=_trade_log.id,
+                                event_type="execution_failed",
+                                run_id=None,
+                                keep_vs_close="open",
+                                decision_reason=f"Alpaca order failed after {_attempt} attempts: {exc}",
+                                event_details={
+                                    "symbol": symbol,
+                                    "side": side,
+                                    "notional": use_notional or notional,
+                                    "attempts": _attempt,
+                                    "error": str(exc),
+                                },
+                            )
+                            _ddb.commit()
+                    except Exception as _dlx:
+                        _ddb.rollback()
+                        print(f"[decision-log] execution fallback error: {_dlx}")
+                    finally:
+                        _ddb.close()
+                except Exception as _dlx:
+                    print(f"[decision-log] execution fallback error (non-fatal): {_dlx}")
+                print(f"[alpaca] order FAILED after {_attempt} attempts for {side} {symbol}: {exc}")
+                _try_exec_order = False
+            else:
+                # First failure — retry after brief delay
+                print(f"[alpaca] order failed on attempt {_attempt} for {side} {symbol}: {exc} — retrying...")
+                _time.sleep(2)
 
 
 # ── Fill polling ──────────────────────────────────────────────────────────────
