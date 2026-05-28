@@ -712,3 +712,14 @@ class DecisionLogDecisionDiff(DecisionLogBase):
     before_size_pct = Column(Float, nullable=True)
     after_size_pct = Column(Float, nullable=True)
     reason_code = Column(String(64), nullable=True)
+
+
+class DecisionLogFeedback(DecisionLogBase):
+    """Weekly performance feedback analysis results and user acceptance."""
+    __tablename__ = "decision_log_feedback"
+
+    id = Column(Integer, primary_key=True)
+    feedback_type = Column(String(32), nullable=False, index=True)
+    analysis_data = Column(Text, nullable=True)
+    timestamp_data = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)

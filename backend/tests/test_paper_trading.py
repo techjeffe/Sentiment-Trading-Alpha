@@ -17,7 +17,24 @@ from services.paper_trading import get_summary, process_signals
 
 
 @pytest.fixture()
-def db_session():
+def db_session(monkeypatch):
+    # Clear module-level cron overlap state so tests don't interfere with each other
+    import services.paper_trading as _pt
+    _pt._cron_overlap_keys.clear()
+    _pt._last_order_times.clear()
+
+    # Restore real PaperTrade class in case test_alpaca_broker patched it.
+    # _resolve_underlying_conflicts imports PaperTrade at function-call time,
+    # so we must patch both the module attribute AND the paper_trading module's
+    # local namespace (if it cached the import).
+    import database.models as _dm
+    from database.models import PaperTrade as _RealPaperTrade
+    _dm.PaperTrade = _RealPaperTrade
+
+    # Also patch in paper_trading's namespace since it may have cached the import
+    import services.paper_trading as _pt_mod
+    _pt_mod.PaperTrade = _RealPaperTrade
+
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(bind=engine)

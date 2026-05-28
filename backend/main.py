@@ -223,13 +223,47 @@ async def _pnl_scheduler_loop():
         await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
 
 
+async def _weekly_feedback_scheduler_loop():
+    """Weekly performance feedback analysis — runs Friday 4-6pm CT.
+    
+    Checks every 30 minutes if conditions are met (Friday 4-6pm CT,
+    not already run this week). If so, runs the full analysis pipeline
+    and logs results to the decision log.
+    """
+    from services.feedback_analysis import should_run_analysis, run_weekly_analysis
+
+    while True:
+        db = SessionLocal()
+        try:
+            if should_run_analysis(db):
+                print("[feedback] Weekly analysis window active — running performance analysis...")
+                try:
+                    result = await asyncio.to_thread(run_weekly_analysis, db, request_id="weekly_schedule")
+                    if result.get("status") == "success":
+                        patterns = len(result.get("patterns", []))
+                        suggestions = len(result.get("suggestions", []))
+                        print(f"[feedback] Weekly analysis complete: {patterns} patterns, {suggestions} suggestions")
+                    else:
+                        print(f"[feedback] Weekly analysis: {result.get('message', 'no data')}")
+                except Exception as exc:
+                    print(f"[feedback] Weekly analysis error: {exc}")
+        except Exception as exc:
+            db.rollback()
+            print(f"[feedback] Scheduler error: {exc}")
+        finally:
+            db.close()
+
+        await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager for startup and shutdown events."""
-    data_ingestion_task = None
-    pnl_scheduler_task  = None
-    alpaca_poll_task    = None
-    telegram_bot_task   = None
+    data_ingestion_task      = None
+    pnl_scheduler_task       = None
+    alpaca_poll_task         = None
+    feedback_scheduler_task  = None
+    telegram_bot_task        = None
 
     print("=" * 60)
     print("3x Leveraged Sentiment Trading System - Starting...")
@@ -304,6 +338,9 @@ async def lifespan(app: FastAPI):
     alpaca_poll_task = asyncio.create_task(_alpaca_poll_scheduler_loop())
     print("Alpaca order poll scheduler started (5 min interval)")
 
+    feedback_scheduler_task = asyncio.create_task(_weekly_feedback_scheduler_loop())
+    print("Weekly feedback analysis scheduler started (Friday 4pm CT, every 30 min check)")
+
     try:
         from services.app_config import get_or_create_app_config
         from services.secret_store import get_telegram_credentials
@@ -344,6 +381,7 @@ async def lifespan(app: FastAPI):
         (data_ingestion_task, "data_ingestion"),
         (pnl_scheduler_task, "pnl_scheduler"),
         (alpaca_poll_task, "alpaca_poll"),
+        (feedback_scheduler_task, "feedback_scheduler"),
         (telegram_bot_task, "telegram_bot"),
     ]:
         if task:

@@ -20,7 +20,13 @@ from database.models import AppConfig, AnalysisResult
 from config.logic_loader import LOGIC as _L
 
 
-DEFAULT_TRACKED_SYMBOLS = ["USO", "IBIT", "QQQ", "SPY"]
+# Full list of symbols the system supports (available for manual selection).
+SUPPORTED_SYMBOLS = ["USO", "IBIT", "QQQ", "SPY"]
+
+# Symbols pre-selected in the watchlist on fresh installs.
+# IBIT is excluded here because trade data shows it underperforms (81% loss rate,
+# -16.44% total PnL) but remains in SUPPORTED_SYMBOLS so users can re-add it.
+DEFAULT_TRACKED_SYMBOLS = ["USO", "QQQ", "SPY"]
 DEFAULT_RSS_ARTICLE_DETAIL_MODE = "normal"
 DEFAULT_RSS_ARTICLE_LIMITS = {"light": 5, "normal": 10, "detailed": 20}
 DEFAULT_WEB_RESEARCH_ITEMS = {"light": 3, "normal": 4, "detailed": 6}
@@ -45,7 +51,7 @@ LEGACY_RISK_PROFILE_ALIASES = {
 }
 DEFAULT_REMOTE_SNAPSHOT_MODE = "telegram"
 VALID_REMOTE_SNAPSHOT_MODES = {"telegram"}
-DEFAULT_ALPACA_EXECUTION_MODE = "off"
+DEFAULT_ALPACA_EXECUTION_MODE = "paper"
 VALID_ALPACA_EXECUTION_MODES = {"off", "paper", "live"}
 DEFAULT_INFERENCE_BACKEND = "ollama"
 VALID_INFERENCE_BACKENDS = {"ollama", "vllm", "openai"}
@@ -53,7 +59,7 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 MAX_CUSTOM_SYMBOLS = 50
 MAX_CUSTOM_RSS_FEEDS = 3
-MAX_TRACKED_SYMBOLS = len(DEFAULT_TRACKED_SYMBOLS) + MAX_CUSTOM_SYMBOLS
+MAX_TRACKED_SYMBOLS = len(SUPPORTED_SYMBOLS) + MAX_CUSTOM_SYMBOLS
 DEFAULT_ESTIMATED_ANALYSIS_SECONDS = 82
 DEFAULT_SNAPSHOT_RETENTION_LIMIT = 12
 DEFAULT_RSS_FEED_URLS = [feed["url"] for feed in DEFAULT_RSS_FEEDS]
@@ -132,7 +138,7 @@ def _normalize_symbols(symbols: Any, *, fallback: List[str] | None = None, max_i
 
 def _normalize_custom_symbols(symbols: Any) -> List[str]:
     custom = _normalize_symbols(symbols, fallback=[], max_items=MAX_CUSTOM_SYMBOLS)
-    return [symbol for symbol in custom if symbol not in DEFAULT_TRACKED_SYMBOLS][:MAX_CUSTOM_SYMBOLS]
+    return [symbol for symbol in custom if symbol not in SUPPORTED_SYMBOLS][:MAX_CUSTOM_SYMBOLS]
 
 
 def _infer_custom_symbols(tracked_symbols: Any, custom_symbols: Any) -> List[str]:
@@ -140,13 +146,13 @@ def _infer_custom_symbols(tracked_symbols: Any, custom_symbols: Any) -> List[str
     tracked = _normalize_symbols(tracked_symbols, fallback=[], max_items=MAX_TRACKED_SYMBOLS)
     inferred = [
         symbol for symbol in tracked
-        if symbol not in DEFAULT_TRACKED_SYMBOLS and symbol not in explicit_custom
+        if symbol not in SUPPORTED_SYMBOLS and symbol not in explicit_custom
     ]
     return (explicit_custom + inferred)[:MAX_CUSTOM_SYMBOLS]
 
 
 def _normalize_tracked_symbols(symbols: Any, custom_symbols: List[str]) -> List[str]:
-    allowed = set(DEFAULT_TRACKED_SYMBOLS) | set(custom_symbols)
+    allowed = set(SUPPORTED_SYMBOLS) | set(custom_symbols)
     normalized = _normalize_symbols(symbols, fallback=[], max_items=MAX_TRACKED_SYMBOLS)
     return [symbol for symbol in normalized if symbol in allowed][:MAX_TRACKED_SYMBOLS]
 
@@ -416,7 +422,7 @@ def _label_from_url(url: str) -> str:
 
 
 def build_supported_symbols(custom_symbols: List[str]) -> List[str]:
-    return DEFAULT_TRACKED_SYMBOLS + [symbol for symbol in custom_symbols if symbol not in DEFAULT_TRACKED_SYMBOLS]
+    return SUPPORTED_SYMBOLS + [symbol for symbol in custom_symbols if symbol not in SUPPORTED_SYMBOLS]
 
 
 def build_supported_rss_feeds(custom_rss_feeds: List[str], custom_rss_feed_labels: Dict[str, str] | None = None) -> List[Dict[str, str]]:

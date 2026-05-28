@@ -703,6 +703,22 @@ def process_signals(
         execution_ticker = str(rec.get("execution_ticker") or rec.get("entry_symbol") or "").upper()
         signal_type = str(rec.get("signal_type") or "HOLD").upper()
         leverage = str(rec.get("leverage") or "1x")
+
+        # ── SHORT → inverse ETF mapping ────────────────────────────────
+        # When signal_type is SHORT and execution_ticker == underlying,
+        # no inverse ETF was pre-mapped by the recommendation engine.
+        # Look up the inverse ETF now so paper trades record the actual
+        # ticker being traded and the dashboard can display it.
+        if signal_type == "SHORT" and execution_ticker == underlying:
+            from services.alpaca_broker import INVERSE_ETF_MAP
+            inverse_etf = INVERSE_ETF_MAP.get(underlying)
+            if inverse_etf:
+                execution_ticker = inverse_etf
+                print(
+                    f"[paper] SHORT→inverse ETF: {underlying} → {execution_ticker} "
+                    f"(underlying tracked, ETF used for execution)"
+                )
+
         conviction_level = str(rec.get("conviction_level") or "MEDIUM").upper()
         trading_type = str(rec.get("trading_type") or "SWING").upper()
         holding_minutes = int(rec.get("holding_minutes") or _cv["holding_minutes"].get(trading_type, 720))
@@ -1115,22 +1131,8 @@ def process_signals(
         # We gate on conviction_level: only HIGH conviction gets an automatic pass.
         # MEDIUM requires the configured entry threshold; LOW is always blocked.
         # EXCEPTION: crazy profile allows LOW conviction entries.
-        _is_crazy_profile = False
-        try:
-            if _app_config is not None:
-                _is_crazy_profile = str(getattr(_app_config, "risk_profile", "") or "").strip().lower() == "crazy"
-        except Exception:
-            pass
-        _threshold = _entry_threshold_for_session(session["status"], _app_config)
-        _conviction = str(conviction_level or "MEDIUM").upper()
-        if _conviction == "LOW" and not _is_crazy_profile:
-            action_summary["action"] = "skipped"
-            action_summary["reason"] = "low_conviction_blocked"
-            action_summary["entry_threshold"] = _threshold
-            print(f"[paper] {underlying} {signal_type}: skipped — LOW conviction blocked")
-            actions.append(action_summary)
-            continue
-
+        # LOW conviction trades are allowed at vol-scaled size (0.5× conviction scalar).
+        # The vol-sizing formula in _compute_vol_normalized_amount handles the size reduction.
         # Open new position — size using volatility targeting, then apply portfolio cap
         if getattr(_app_config, "alpaca_fixed_order_size", False):
             _amount = _base_amount
@@ -1439,10 +1441,23 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
                 unique_opens.append((trade, event))
 
         # ── DISPATCH: closes first, then opens ──────────────────────────
+        _dispatch_summary = {"total": len(pending), "unique": len(seen_keys), "closes": len(unique_closes), "opens": len(unique_opens)}
+        print(f"[alpaca] dispatch: {_dispatch_summary['total']} total → {_dispatch_summary['unique']} unique ({_dup_count} dupes, {_cooldown_skipped} cooldown)")
         for trade, event in unique_closes:
-            maybe_execute_alpaca_order(db, trade, event, config)
+            _sym = str(getattr(trade, "execution_ticker", "") or getattr(trade, "underlying", "?")).upper()
+            print(f"[alpaca] dispatching close: {_sym} (paper_id={getattr(trade, 'id', '?')})")
+            try:
+                maybe_execute_alpaca_order(db, trade, event, config)
+            except Exception as _exc:
+                print(f"[alpaca] dispatch ERROR close {_sym}: {_exc}")
         for trade, event in unique_opens:
-            maybe_execute_alpaca_order(db, trade, event, config)
+            _sym = str(getattr(trade, "execution_ticker", "") or getattr(trade, "underlying", "?")).upper()
+            print(f"[alpaca] dispatching open: {_sym} (paper_id={getattr(trade, 'id', '?')})")
+            try:
+                maybe_execute_alpaca_order(db, trade, event, config)
+            except Exception as _exc:
+                print(f"[alpaca] dispatch ERROR open {_sym}: {_exc}")
+        print(f"[alpaca] dispatch complete: {_dispatch_summary['closes']} closes, {_dispatch_summary['opens']} opens attempted")
 
         # ── RECORD LAST ORDER TIMES ─────────────────────────────────────
         for trade, event in seen_keys.values():

@@ -322,11 +322,11 @@ class PersistenceService:
                 # Per-symbol conviction thresholds — use crazy overrides if applicable
                 _is_crazy = str(risk_profile or "").strip().lower() == "crazy"
                 _crazy_cv = _L.get("crazy", {}).get("conviction", {})
-                _high_score_threshold = float(_crazy_cv.get("high_score_threshold", _cv.get("high_score_threshold", 0.6)))
-                _high_confidence_threshold = float(_crazy_cv.get("high_confidence_threshold", _cv.get("high_confidence_threshold", 0.7)))
+                _high_score_threshold = float(_crazy_cv.get("high_score_threshold", _cv.get("high_score_threshold", 0.5)))
+                _high_confidence_threshold = float(_crazy_cv.get("high_confidence_threshold", _cv.get("high_confidence_threshold", 0.8)))
                 if not _is_crazy:
-                    _high_score_threshold = float(_cv.get("high_score_threshold", 0.6))
-                    _high_confidence_threshold = float(_cv.get("high_confidence_threshold", 0.7))
+                    _high_score_threshold = float(_cv.get("high_score_threshold", 0.5))
+                    _high_confidence_threshold = float(_cv.get("high_confidence_threshold", 0.8))
 
                 def _compute_symbol_conviction(sym: str, sym_signal_type: str) -> str:
                     """Compute per-symbol conviction from its own sentiment scores.
@@ -334,15 +334,24 @@ class PersistenceService:
                     Each symbol's conviction is independent of the portfolio-level signal.
                     HOLD signals always get LOW conviction.
                     Directional signals use the symbol's own directional_score and confidence.
+                    Distribution target: ~25% HIGH, ~50% MEDIUM, ~25% LOW.
+                    HIGH: confidence >= 0.80 (confidence-based).
+                    LOW: weak directional signal AND low confidence.
+                    MEDIUM: everything else.
                     """
                     if sym_signal_type == "HOLD":
                         return "LOW"
                     sym_result = (sentiment_results or {}).get(sym, {})
                     directional = float(sym_result.get("directional_score", 0.0) or 0.0)
                     confidence = float(sym_result.get("confidence", 0.0) or 0.0)
-                    strongest_score = abs(directional) * confidence
-                    if strongest_score > _high_score_threshold and confidence > _high_confidence_threshold:
+                    # HIGH: confidence-based (strong conviction regardless of score magnitude)
+                    if confidence >= _high_confidence_threshold:
                         return "HIGH"
+                    # LOW: weak directional signal AND low confidence
+                    _low_dir_thresh = float(_cv.get("low_directional_threshold", 0.30))
+                    _low_conf_thresh = float(_cv.get("low_confidence_threshold", 0.55))
+                    if abs(directional) < _low_dir_thresh and confidence < _low_conf_thresh:
+                        return "LOW"
                     return "MEDIUM"
 
                 # Build paper trading entries from final recommendations
@@ -363,7 +372,11 @@ class PersistenceService:
                         signal_type = "HOLD"
                     _conviction = _compute_symbol_conviction(underlying, signal_type)
                     _trade_type = {"HIGH": "POSITION", "MEDIUM": "SWING", "LOW": "VOLATILE_EVENT"}.get(_conviction, "SWING")
-                    _hold_mins = _cv["holding_minutes"].get(_trade_type, 720)
+                    # LOW conviction uses shorter holding windows
+                    if _conviction == "LOW":
+                        _hold_mins = _cv.get("low_holding_minutes", _cv["holding_minutes"]).get(_trade_type, 60)
+                    else:
+                        _hold_mins = _cv["holding_minutes"].get(_trade_type, 720)
                     _atr_pct = 0.0
                     if price_context:
                         _indicators = (price_context.get(f"technical_indicators_{underlying.lower()}") or {})
