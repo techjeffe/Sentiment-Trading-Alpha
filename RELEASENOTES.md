@@ -1,3 +1,54 @@
+# Release Notes — May 28, 2026
+
+## Fix 6 Issues: Execution Gap, SHORT Bias, Conviction System, Feedback Loop, IBIT Removal, Inverse ETF Mapping
+
+Closes Issues #8, #9, #13, #14, #15, #16.
+
+**#8 — Remove IBIT from default watchlist (app_config.py):**
+
+- IBIT removed from `DEFAULT_TRACKED_SYMBOLS` (81% loss rate, -16.44% total PnL since inception)
+- Added `SUPPORTED_SYMBOLS` constant — IBIT stays available for manual re-addition via the Admin UI
+- `MAX_TRACKED_SYMBOLS` now calculated from `SUPPORTED_SYMBOLS` so the cap is consistent
+
+**#9 — AUTO-MAP SHORT signals to inverse ETFs (alpaca_broker.py, paper_trading.py):**
+
+- Added `INVERSE_ETF_MAP` dictionary mapping individual tickers to their inverse ETFs (e.g., NVDA→PSQ, TSLA→SQQQ, SPY→SPXS, COIN→BITI)
+- `maybe_execute_alpaca_order()` now buys the inverse ETF instead of skipping when short selling is disabled
+- `process_signals()` in `paper_trading.py` sets `execution_ticker` to the inverse ETF at signal time so the dashboard shows the actual traded ticker
+- `_configured_live_execution_symbols()` always includes all inverse ETF values so they pass the symbol allow-list check
+- Added `test_inverse_etf_mapping.py` to cover SHORT→ETF routing
+
+**#13 — Fix Execution Gap (91%→near 100%) (alpaca_broker.py, paper_trading.py):**
+
+- Changed default `alpaca_execution_mode` from `"off"` to `"paper"`
+- Added 1-retry logic (2s delay) to both `close_position()` and `place_order()` dispatch paths
+- On final failure, logs to `alpaca_orders` and falls back to the decision log with full error context
+- Added dispatch monitoring: per-trade log lines and a summary (`X closes, Y opens attempted`) in `_dispatch_alpaca_orders()`
+
+**#14 — Eliminate SHORT Bias (94% SHORT) (logic_config.json):**
+
+- Hardened SHORT entry thresholds: `bluster_short_threshold` -0.60→-0.70, `policy_signal_threshold` 0.40→0.45, `direction_confidence_min` 0.50→0.55
+- Symmetrized technical modifiers: RSI overbought/oversold long/short penalties now ±0.06 (was -0.08), BB above/below penalties now ±0.03 (was -0.05)
+
+**#15 — Fix Conviction System (all MEDIUM→25/50/25 distribution) (logic_config.json, persistence_service.py, paper_trading.py):**
+
+- HIGH conviction: confidence ≥ 0.80 (confidence-based, regardless of score magnitude)
+- LOW conviction: weak directional signal (`< 0.30`) AND low confidence (`< 0.55`)
+- MEDIUM: everything else
+- Added `low_holding_minutes` block in config for shorter holding windows on LOW conviction trades
+- Removed the LOW conviction hard-block — LOW trades are now allowed at vol-scaled size
+
+**#16 — Performance Feedback Loop (weekly Friday 4pm CT) (feedback_analysis.py, routers/feedback.py, models.py, main.py):**
+
+- New `feedback_analysis.py` service: analyzes last 7 days of closed trades, detects patterns (direction bias, symbol underperformance, conviction mismatch, holding period losses), and generates parameter adjustment suggestions
+- New `routers/feedback.py`: REST API — `GET /api/feedback/latest`, `POST /api/feedback/analyze`, `POST /api/feedback/accept`, `GET /api/feedback/schedule`, `GET /api/feedback/status`
+- Added `DecisionLogFeedback` table to `models.py`
+- Background scheduler in `main.py` checks every 30 minutes; fires analysis during the Friday 4–6pm CT window (once per week)
+
+**Files changed:** `backend/config/logic_config.json`, `backend/database/models.py`, `backend/main.py`, `backend/routers/__init__.py`, `backend/routers/feedback.py` *(new)*, `backend/services/alpaca_broker.py`, `backend/services/analysis/persistence_service.py`, `backend/services/app_config.py`, `backend/services/feedback_analysis.py` *(new)*, `backend/services/paper_trading.py`, `backend/tests/test_inverse_etf_mapping.py` *(new)*, `backend/tests/test_paper_trading.py`
+
+---
+
 # Release Notes — May 22, 2026
 
 ## Live Position Stop-Loss/Take-Profit Monitoring + Client Order ID URL Encoding
