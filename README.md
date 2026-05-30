@@ -15,15 +15,12 @@ Licensed under the [Apache License, Version 2.0](LICENSE).
 ollama pull qwen3.5:9b
 ollama serve
 
-# Terminal 2 — Start the backend
+# Terminal 2 — Start the backend & front-end
 pip install -r requirements.txt
-python run.py                              # Windows
-python3.12 run.py                          # macOS
-
-# Terminal 3 — Start the frontend
 cd frontend
 npm install
-npm run dev
+cd ..
+npm run start
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
