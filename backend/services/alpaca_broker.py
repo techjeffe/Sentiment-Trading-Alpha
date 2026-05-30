@@ -992,6 +992,103 @@ def _get_pdt_block_reason(broker: "AlpacaBroker", paper_trade, event: str, convi
     return None
 
 
+def _compute_pdt_downgrade(original_trading_type: str, config) -> Optional[str]:
+    """
+    Compute the downgraded trading type when a PDT-blocked order is queued.
+
+    Rule: SWING → POSITION (extends holding period from 12h to 36h,
+    avoiding same-day exits that would consume another day trade).
+    SCALP and VOLATILE_EVENT remain unchanged (too short anyway).
+    POSITION remains POSITION (already the longest holding period).
+    """
+    downgrade_enabled = bool(getattr(config, "alpaca_pdt_downgrade_swing_to_position", True))
+    if not downgrade_enabled:
+        return None
+
+    original = str(original_trading_type or "").upper()
+    if original == "SWING":
+        return "POSITION"
+    return None
+
+
+def _queue_pdt_blocked_order(db, paper_trade, symbol: str, side: str, notional: float,
+                              qty: float, order_type: str, time_in_force: str,
+                              limit_price: float, extended_hours: bool,
+                              conviction_level: str, trading_type: str,
+                              downgraded_type: Optional[str], block_reason: str) -> None:
+    """
+    Queue a PDT-blocked order for replay at the next market open.
+
+    The order is stored in the pdt_pending_orders table with:
+    - Original conviction and trading type preserved
+    - Trading type downgraded (SWING → POSITION) to avoid same-day exits
+    - Status set to 'queued' for the scheduler to pick up
+    """
+    from database.models import PdtpendingOrder, AppConfig
+
+    # Enforce queue size limit — drop oldest if at capacity
+    config = db.query(AppConfig).first()
+    max_queue = int(getattr(config, "alpaca_pdt_max_queue_size", 10)) if config else 10
+    current_count = db.query(PdtpendingOrder).filter(
+        PdtpendingOrder.status == "queued"
+    ).count()
+
+    if current_count >= max_queue:
+        # Drop the oldest queued order
+        oldest = db.query(PdtpendingOrder).filter(
+            PdtpendingOrder.status == "queued"
+        ).order_by(PdtpendingOrder.queued_at.asc()).first()
+        if oldest:
+            oldest.status = "expired"
+            oldest.error_message = f"dropped: queue full ({max_queue})"
+            print(f"[alpaca/pdt] expired oldest queued order for {oldest.symbol} (queue full at {max_queue})")
+
+    try:
+        queue_entry = PdtpendingOrder(
+            paper_trade_id=getattr(paper_trade, "id", None),
+            symbol=symbol,
+            side=side,
+            notional=notional,
+            qty=qty,
+            order_type=order_type,
+            time_in_force=time_in_force,
+            limit_price=limit_price,
+            extended_hours=extended_hours,
+            original_conviction=conviction_level,
+            original_trading_type=trading_type,
+            downgraded_to_trading_type=downgraded_type,
+            downgraded_reason=f"downgraded from {trading_type} to {downgraded_type} to avoid same-day exit" if downgraded_type else None,
+            status="queued",
+            error_message=block_reason,
+        )
+        db.add(queue_entry)
+        db.commit()
+        print(f"[alpaca/pdt] queued order for {symbol} ({side}, ${notional:.2f}) — "
+              f"{trading_type}→{downgraded_type} if downgraded, replay at next market open")
+    except Exception as exc:
+        db.rollback()
+        print(f"[alpaca/pdt] error queuing order for {symbol}: {exc}")
+
+
+def _get_pdt_status(db) -> dict:
+    """
+    Return current PDT status: account equity, daytrade count, queue status.
+    Used by the API endpoint to show PDT state to the user.
+    """
+    from database.models import AppConfig, PdtpendingOrder
+
+    config = db.query(AppConfig).first()
+    if not config:
+        return {"error": "no config found"}
+
+    return {
+        "pdt_queue_enabled": bool(getattr(config, "alpaca_pdt_queue_enabled", True)),
+        "pdt_downgrade_enabled": bool(getattr(config, "alpaca_pdt_downgrade_swing_to_position", True)),
+        "pdt_notify_on_limit": bool(getattr(config, "alpaca_pdt_notify_on_limit", True)),
+        "pdt_max_queue_size": int(getattr(config, "alpaca_pdt_max_queue_size", 10)),
+    }
+
+
 # ── Main hook ─────────────────────────────────────────────────────────────────
 
 def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
@@ -1179,21 +1276,35 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
                     open_raw_context["high_conviction_pdt_override"] = True
                 print(f"[alpaca] HIGH conviction override — bypassing PDT gate for {symbol} ({event})")
             else:
-                # For close events: direct short means buy-to-cover, everything else is sell
-                if event == "close":
-                    side_hint = "buy" if direct_short else "sell"
+                # ── PDT-blocked: queue for next market open ────────────────
+                # Compute downgrade (SWING → POSITION) to avoid same-day exits
+                _trading_type = str(getattr(paper_trade, "trading_type", "SWING") or "SWING").upper()
+                _downgraded_type = _compute_pdt_downgrade(_trading_type, config)
+
+                # Queue the order instead of silently dropping it
+                queue_enabled = bool(getattr(config, "alpaca_pdt_queue_enabled", True))
+                if queue_enabled and event == "open":
+                    _queue_pdt_blocked_order(
+                        db, paper_trade, symbol, side, notional, qty,
+                        str(getattr(config, "alpaca_order_type", "market")).lower(),
+                        "day", limit_price, False,
+                        _conviction, _trading_type, _downgraded_type, pdt_block_reason,
+                    )
                 else:
-                    side_hint = "buy" if not direct_short else "sell"
-                _record_alpaca_order_skip(
-                    db,
-                    paper_id,
-                    side_hint,
-                    symbol,
-                    notional if event == "open" else None,
-                    broker.mode,
-                    pdt_block_reason,
-                )
-                print(f"[alpaca] skipping {event} for {symbol}: {pdt_block_reason}")
+                    _record_alpaca_order_skip(
+                        db, paper_id, side, symbol, notional,
+                        broker.mode, pdt_block_reason,
+                    )
+
+                # Notify user if PDT notify is enabled
+                notify_enabled = bool(getattr(config, "alpaca_pdt_notify_on_limit", True))
+                if notify_enabled:
+                    print(f"[alpaca/pdt] PDT limit hit for {symbol}: {pdt_block_reason}")
+                    if queue_enabled and event == "open":
+                        print(f"[alpaca/pdt] Order queued for next market open" +
+                              (f" (downgraded {_trading_type}→{_downgraded_type})" if _downgraded_type else ""))
+                    else:
+                        print(f"[alpaca/pdt] Order NOT queued (queue disabled or close event)")
                 return
 
     if event == "close":

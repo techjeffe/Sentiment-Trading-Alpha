@@ -1,3 +1,31 @@
+# Release Notes — May 29, 2026
+
+## Fix PDT Restrictions — Queue Blocked Orders for Next Market Open
+
+Closes Issue #11. Issue #10 closed as user decision (no default IREN).
+
+**#11 — Fix PDT restrictions (alpaca_broker.py, models.py, app_config.py, main.py, pdt_queue.py):**
+
+- Added `pdt_pending_orders` table to queue orders blocked by PDT restrictions
+- When a live order is blocked by PDT (daytrade_count >= 3):
+  - **Queue**: Order is stored with original parameters for replay at next market open (9:30 AM ET)
+  - **Downgrade**: SWING signals are downgraded to POSITION (12h→36h holding) to avoid same-day exits that would consume another day trade
+  - **Notify**: Console log flags the PDT limit hit; user can check status via API
+- Added scheduler loop (`_pdt_queue_processor_loop`) that replays queued orders at market open (9:25-9:35 AM ET window)
+- Added API endpoints:
+  - `GET /api/pdt/status` — current PDT config and queue stats
+  - `GET /api/pdt/queue` — list pending queued orders
+  - `POST /api/pdt/queue/replay` — manually trigger queue replay
+  - `DELETE /api/pdt/queue/clear` — clear all queued orders
+- Config fields: `alpaca_pdt_queue_enabled`, `alpaca_pdt_downgrade_swing_to_position`, `alpaca_pdt_max_queue_size`, `alpaca_pdt_notify_on_limit`
+- HIGH conviction override (from previous fix) still works — HIGH conviction trades bypass PDT gate
+
+**#10 — Surge on IREN:**
+
+- Closed as user decision: IREN will NOT be added as a default symbol. Available for manual selection via Admin UI.
+
+---
+
 # Release Notes — May 28, 2026
 
 ## Fix 6 Issues: Execution Gap, SHORT Bias, Conviction System, Feedback Loop, IBIT Removal, Inverse ETF Mapping
