@@ -2,7 +2,7 @@
 
 A geopolitical sentiment pipeline that reads the news, reasons about it with a local (or cloud) LLM, and generates trade recommendations for USO, IBIT, QQQ, and SPY — including leveraged execution tickers when confidence is high enough to warrant it. Runs automatically on a user set schedule (default 30 minutes).
 
-> **This is experimental software. It is not financial advice. Do not trade real money with it.**
+> **This is experimental software. It is not financial advice.**
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
@@ -39,7 +39,7 @@ For a deeper reference covering the API, schema migrations, position sizing math
 ### The Pipeline
 
 1. **Ingestion** — A background worker continuously polls RSS feeds, extracts full article text, and queues rows in a local SQLite database.
-2. **Analysis** — Every 30 minutes the main batch job consumes queued articles, runs a two-stage LLM pipeline (entity extraction → financial reasoning), and overlays structured validation data from FRED and EIA.
+2. **Analysis** — Every 30 minutes (or longer/shorter - user settable) the main batch job consumes queued articles, runs a two-stage LLM pipeline (entity extraction → financial reasoning), and overlays structured validation data from FRED and EIA.
 3. **Signals** — Each symbol gets its own specialist prompt and produces a BUY, SELL, or HOLD recommendation with a conviction level (LOW / MEDIUM / HIGH). A red-team review challenges the initial thesis before the final signal is shown.
 4. **Paper trading** — Every signal auto-simulates a volatility-normalized paper trade. Position size is based on 14-day ATR and conviction level, not a flat dollar amount.
 5. **Live trading (optional)** — Alpaca brokerage integration mirrors paper trade opens and closes to real orders in real time, with configurable guardrails.
