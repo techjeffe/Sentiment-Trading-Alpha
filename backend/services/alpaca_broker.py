@@ -316,6 +316,15 @@ def _is_extended_hours_now(config=None) -> bool:
     return ext_open <= t < reg_open or reg_close < t <= ext_close
 
 
+def _is_regular_market_hours_now() -> bool:
+    """Return True during regular Alpaca market hours (9:30 AM – 4:00 PM ET, weekdays)."""
+    now_et = datetime.now(_ET)
+    if now_et.weekday() >= 5:
+        return False
+    h, m = now_et.hour, now_et.minute
+    return (h > 9 or (h == 9 and m >= 30)) and h < 16
+
+
 # ── Circuit breakers ──────────────────────────────────────────────────────────
 
 def _get_alpaca_live_open_exposure(broker: "AlpacaBroker") -> Optional[float]:
@@ -1008,25 +1017,64 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
         print(f"[alpaca] skipping {event} for {symbol}: {conviction_block}")
         return
 
-    # ── Live position stop-loss / take-profit monitoring ──────────────
-    if event == "open" and execution_mode == "live" and broker is not None:
-        _sl_pct = float(getattr(config, "stop_loss_pct", 2.0) or 2.0)
-        _tp_pct = float(getattr(config, "take_profit_pct", 3.0) or 3.0)
-        _sl_hit = _check_live_position_stop_loss(broker, symbol, _sl_pct)
-        _tp_hit = _check_live_position_take_profit(broker, symbol, _tp_pct)
-        if _sl_hit or _tp_hit:
-            info = _sl_hit if _sl_hit else _tp_hit
-            reason = "stop_loss_hit" if _sl_hit else "take_profit_hit"
-            _record_alpaca_order_skip(
-                db, paper_id, "sell", symbol, notional,
-                broker.mode,
-                f"{reason}: live position P&L {info['pnl_pct']:.2f}%",
-            )
+    # ── Live position direction-flip ──────────────────────────────────
+    # When the new signal opposes an existing live position, close the live
+    # position first then fall through to open the new one.
+    # P&L exits are managed by the paper-trading trailing-stop system;
+    # those closes propagate to Alpaca when the paper trade closes.
+    if event == "open" and execution_mode == "live" and live_side:
+        _want_long         = (signal_type == "LONG")
+        _want_short_direct = direct_short and allow_short
+        _conflict = (
+            (live_side == "long"  and _want_short_direct) or
+            (live_side == "short" and _want_long)
+        )
+        if _conflict:
+            _flip_close_side = "sell" if live_side == "long" else "buy"
+            _flip_qty        = abs(float(live_qty or 0))
+            _live_cur_price  = float((live_pos or {}).get("current_price") or 0)
+            _flip_slippage   = float(getattr(config, "alpaca_limit_slippage_pct", 0.002) or 0.002)
+            _flip_ext        = _is_extended_hours_now(config)
             print(
-                f"[alpaca] blocking open for {symbol}: "
-                f"{reason} at {info['pnl_pct']:.2f}% (qty {info['qty']}, side {info['side']})"
+                f"[alpaca] direction flip for {symbol}: closing existing {live_side} "
+                f"(qty={_flip_qty}) before opening {signal_type}"
             )
-            return
+            try:
+                if _flip_ext and _live_cur_price > 0 and _flip_qty > 0:
+                    _flip_limit = round(
+                        _live_cur_price * (1 - _flip_slippage) if _flip_close_side == "sell"
+                        else _live_cur_price * (1 + _flip_slippage),
+                        2,
+                    )
+                    _flip_resp = broker.place_order(
+                        symbol=symbol,
+                        side=_flip_close_side,
+                        qty=_flip_qty,
+                        order_type="limit",
+                        limit_price=_flip_limit,
+                        extended_hours=True,
+                        time_in_force="day",
+                        client_order_id=f"gr-flip-{symbol.lower()}-{int(_time.time())}",
+                    )
+                else:
+                    _flip_limit = None
+                    _flip_resp  = broker.close_position(symbol)
+                _record_alpaca_order(
+                    db, None, _flip_close_side, symbol, None, _flip_qty,
+                    _flip_resp, broker.mode, _flip_ext, _flip_limit, None,
+                )
+                print(
+                    f"[alpaca] direction flip: {symbol} {live_side} closed "
+                    f"(order={_flip_resp.get('id')}, status={_flip_resp.get('status')})"
+                )
+            except Exception as _flip_exc:
+                _record_alpaca_order_error(
+                    db, paper_id, _flip_close_side, symbol, None,
+                    f"direction flip close failed: {_flip_exc}", broker.mode,
+                )
+                print(f"[alpaca] direction flip failed for {symbol}: {_flip_exc}")
+                return
+            # Fall through — live position closed, proceed to open the new one
 
     # ── Determine Alpaca side ────────────────────────────────────────────────
     if event == "open":
@@ -1195,6 +1243,28 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
 
     # ── Build order parameters ───────────────────────────────────────────────
     ext_hours  = _is_extended_hours_now(config)
+
+    # Guard: skip if outside every valid Alpaca trading window.
+    # Regular hours: 9:30 AM – 4:00 PM ET weekdays.
+    # Extended hours: 4:00 AM – 9:30 AM ET and 4:00 PM – 8:00 PM ET (when enabled).
+    # After 8 PM ET there is no valid window; a market order would be rejected
+    # by Alpaca with an "outside market hours" error.
+    if not ext_hours and not _is_regular_market_hours_now():
+        _now_et_ck = datetime.now(_ET)
+        _skip_side = "buy" if signal_type == "LONG" else "sell"
+        _record_alpaca_order_skip(
+            db, paper_id, _skip_side, symbol,
+            notional if event == "open" else None,
+            broker.mode,
+            f"outside all trading windows at {_now_et_ck.strftime('%H:%M ET')}; "
+            "market closed and Alpaca extended hours not active",
+        )
+        print(
+            f"[alpaca] skipping {event} for {symbol}: "
+            f"outside all trading windows ({_now_et_ck.strftime('%H:%M ET')})"
+        )
+        return
+
     slippage   = float(getattr(config, "alpaca_limit_slippage_pct", 0.002) or 0.002)
     limit_price: Optional[float] = None
     qty:         Optional[float] = None

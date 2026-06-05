@@ -269,11 +269,11 @@ class TestHelpers(unittest.TestCase):
     """Tests for helper functions."""
 
     def test_min_same_day_edge_pct(self):
-        """Min same-day exit edge should default to 0.5%."""
+        """Min same-day exit edge should default to 0.0% (PDT restrictions removed)."""
         from services.paper_trading import _min_same_day_exit_edge_pct
 
         result = _min_same_day_exit_edge_pct(None)
-        self.assertEqual(result, 0.5)
+        self.assertEqual(result, 0.0)
 
     def test_market_status_weekend(self):
         """Market should be closed on weekends."""

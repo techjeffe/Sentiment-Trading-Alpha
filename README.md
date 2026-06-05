@@ -227,7 +227,7 @@ The Admin page is where you configure everything. Changes persist in the databas
 - **Scheduling & System** — auto-run cadence, snapshot retention limit, display timezone
 - **Telegram** — bot token, private chat ID, authorized user ID stored in OS keychain; enable Remote Snapshots and Remote Control independently
 - **Price History** — pull and view per-symbol OHLCV history; used for technical indicator computation
-- **Live Trading (Alpaca)** — API key entry, paper/live mode, guardrails (position cap, total exposure cap, daily loss limit, consecutive-loss circuit breaker, PDT protection), and the enable/disable toggle with a "type LIVE to confirm" modal
+- **Live Trading (Alpaca)** — API key entry, paper/live mode, guardrails (position cap, total exposure cap, daily loss limit, consecutive-loss circuit breaker), and the enable/disable toggle with a "type LIVE to confirm" modal
 
 ---
 
@@ -241,7 +241,6 @@ When Alpaca keys are configured and live trading is enabled, every paper trade o
 - Total open exposure cap in USD
 - Daily realized loss limit
 - Consecutive-loss circuit breaker (auto-disables live trading when hit)
-- PDT protection for sub-$25k accounts (can skip same-day closes)
 - All order attempts written to an audit log regardless of outcome
 
 ---
