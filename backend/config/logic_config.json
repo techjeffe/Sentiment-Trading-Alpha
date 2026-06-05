@@ -40,8 +40,8 @@
     "enabled": true,
     "max_multiplier": 5.0
   },
-  "reentry_cooldown_minutes": 120,
-  "min_same_day_exit_edge_pct": 0.5,
+  "reentry_cooldown_minutes": 30,
+  "min_same_day_exit_edge_pct": 0.0,
   "stop_loss_pct": 2.0,
   "take_profit_pct": 3.0,
   "leverage": {

@@ -107,6 +107,7 @@ def test_open_skips_when_symbol_is_not_user_configured(db_session, monkeypatch):
     broker = DummyBroker(mode="live")
     monkeypatch.setattr("services.alpaca_broker.get_broker_from_keychain", lambda mode=None: broker)
     monkeypatch.setattr("services.alpaca_broker._is_extended_hours_now", lambda cfg=None: False)
+    monkeypatch.setattr("services.alpaca_broker._is_regular_market_hours_now", lambda: True)
     monkeypatch.setattr("services.alpaca_broker._check_circuit_breakers", lambda db, cfg, pending_notional=0.0: None)
 
     maybe_execute_alpaca_order(db_session, paper_trade, "open", config)
@@ -155,6 +156,7 @@ def test_close_sells_only_app_managed_qty_above_manual_baseline(db_session, monk
     broker.position = {"qty": "8", "market_value": "1760.00", "side": "long"}
     monkeypatch.setattr("services.alpaca_broker.get_broker_from_keychain", lambda mode=None: broker)
     monkeypatch.setattr("services.alpaca_broker._is_extended_hours_now", lambda cfg=None: False)
+    monkeypatch.setattr("services.alpaca_broker._is_regular_market_hours_now", lambda: True)
     monkeypatch.setattr("services.alpaca_broker._check_circuit_breakers", lambda db, cfg, pending_notional=0.0: None)
 
     maybe_execute_alpaca_order(db_session, paper_trade, "close", config)
@@ -203,6 +205,7 @@ def test_close_skips_when_only_manual_baseline_remains(db_session, monkeypatch):
     broker.position = {"qty": "3", "market_value": "660.00", "side": "long"}
     monkeypatch.setattr("services.alpaca_broker.get_broker_from_keychain", lambda mode=None: broker)
     monkeypatch.setattr("services.alpaca_broker._is_extended_hours_now", lambda cfg=None: False)
+    monkeypatch.setattr("services.alpaca_broker._is_regular_market_hours_now", lambda: True)
     monkeypatch.setattr("services.alpaca_broker._check_circuit_breakers", lambda db, cfg, pending_notional=0.0: None)
 
     maybe_execute_alpaca_order(db_session, paper_trade, "close", config)
@@ -285,6 +288,7 @@ def test_regular_hours_respects_configured_order_type(db_session, monkeypatch):
     broker = DummyBroker(mode="live")
     monkeypatch.setattr("services.alpaca_broker.get_broker_from_keychain", lambda mode=None: broker)
     monkeypatch.setattr("services.alpaca_broker._is_extended_hours_now", lambda cfg=None: False)
+    monkeypatch.setattr("services.alpaca_broker._is_regular_market_hours_now", lambda: True)
     monkeypatch.setattr("services.alpaca_broker._check_circuit_breakers", lambda db, cfg, pending_notional=0.0: None)
 
     maybe_execute_alpaca_order(db_session, paper_trade, "open", config)
@@ -319,6 +323,7 @@ def test_open_skips_when_existing_live_position_already_at_cap(db_session, monke
     broker.position = {"qty": "0.7", "market_value": "103.11", "side": "long"}
     monkeypatch.setattr("services.alpaca_broker.get_broker_from_keychain", lambda mode=None: broker)
     monkeypatch.setattr("services.alpaca_broker._is_extended_hours_now", lambda cfg=None: False)
+    monkeypatch.setattr("services.alpaca_broker._is_regular_market_hours_now", lambda: True)
     monkeypatch.setattr("services.alpaca_broker._check_circuit_breakers", lambda db, cfg, pending_notional=0.0: None)
 
     maybe_execute_alpaca_order(db_session, paper_trade, "open", config)
@@ -358,6 +363,89 @@ def test_extended_hours_open_uses_remaining_capacity_qty(db_session, monkeypatch
     order = broker.orders[0]
     assert order["notional"] is None
     assert order["qty"] == pytest.approx(40.0 / 150.0, rel=0, abs=1e-6)
+
+
+def test_direction_flip_closes_existing_then_opens_new(db_session, monkeypatch):
+    """Direction flip: existing live long + new SHORT signal should close then open."""
+    config = _seed_config(
+        db_session,
+        tracked_symbols=["NET"],
+        custom_symbols=["NET"],
+        alpaca_allow_short_selling=True,
+    )
+    paper_trade = PaperTrade(
+        underlying="NET",
+        execution_ticker="NET",
+        signal_type="SHORT",
+        leverage="1x",
+        market_session="open",
+        amount=100.0,
+        shares=0.4,
+        entry_price=250.0,
+        entered_at=datetime.now(timezone.utc),
+        analysis_request_id="req-flip",
+    )
+    db_session.add(paper_trade)
+    db_session.commit()
+
+    broker = DummyBroker(mode="live")
+    # Simulate existing long position at +24% P&L
+    broker.position = {"qty": "0.4", "market_value": "124.0", "side": "long", "current_price": "310.0"}
+    monkeypatch.setattr("services.alpaca_broker.get_broker_from_keychain", lambda mode=None: broker)
+    monkeypatch.setattr("services.alpaca_broker._is_extended_hours_now", lambda cfg=None: False)
+    monkeypatch.setattr("services.alpaca_broker._is_regular_market_hours_now", lambda: True)
+    monkeypatch.setattr("services.alpaca_broker._check_circuit_breakers", lambda db, cfg, pending_notional=0.0: None)
+
+    maybe_execute_alpaca_order(db_session, paper_trade, "open", config)
+
+    # First order is the flip close (close_position → sell), second is the new short open
+    assert len(broker.orders) == 2
+    close_order, open_order = broker.orders
+    assert close_order["side"] == "sell"   # closed the long
+    assert open_order["side"] == "sell"    # opened the short
+
+
+def test_direction_flip_blocks_open_if_close_fails(db_session, monkeypatch):
+    """If the flip close fails, the new open should NOT be placed."""
+    config = _seed_config(
+        db_session,
+        tracked_symbols=["NET"],
+        custom_symbols=["NET"],
+        alpaca_allow_short_selling=True,
+    )
+    paper_trade = PaperTrade(
+        underlying="NET",
+        execution_ticker="NET",
+        signal_type="SHORT",
+        leverage="1x",
+        market_session="open",
+        amount=100.0,
+        shares=0.4,
+        entry_price=250.0,
+        entered_at=datetime.now(timezone.utc),
+        analysis_request_id="req-flip-fail",
+    )
+    db_session.add(paper_trade)
+    db_session.commit()
+
+    broker = DummyBroker(mode="live")
+    broker.position = {"qty": "0.4", "market_value": "124.0", "side": "long", "current_price": "310.0"}
+
+    def _fail_close(symbol):
+        raise RuntimeError("Alpaca rejected close")
+
+    broker.close_position = _fail_close
+    monkeypatch.setattr("services.alpaca_broker.get_broker_from_keychain", lambda mode=None: broker)
+    monkeypatch.setattr("services.alpaca_broker._is_extended_hours_now", lambda cfg=None: False)
+    monkeypatch.setattr("services.alpaca_broker._is_regular_market_hours_now", lambda: True)
+    monkeypatch.setattr("services.alpaca_broker._check_circuit_breakers", lambda db, cfg, pending_notional=0.0: None)
+
+    maybe_execute_alpaca_order(db_session, paper_trade, "open", config)
+
+    assert broker.orders == []   # no open placed
+    err = db_session.query(AlpacaOrder).filter(AlpacaOrder.error_message.isnot(None)).first()
+    assert err is not None
+    assert "direction flip close failed" in (err.error_message or "")
 
 
 

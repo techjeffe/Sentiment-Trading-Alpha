@@ -1,3 +1,32 @@
+# Release Notes — June 4, 2026
+
+## Live Trading Fixes: Extended-Hours Order Guard, Direction Flip, and PDT Config Relaxation
+
+**After-hours trading window guard (alpaca_broker.py):**
+
+- Added `_is_regular_market_hours_now()` helper (9:30 AM – 4:00 PM ET, weekdays)
+- `maybe_execute_alpaca_order()` now skips orders entirely when outside all valid Alpaca windows — both regular hours and extended hours (4:00 AM – 8:00 PM ET)
+- Previously, orders submitted after 8 PM ET were sent as market orders and rejected by Alpaca; they are now recorded as skipped with a `"outside all trading windows at HH:MM ET"` reason
+- Fix required extracting the hours check into a named function so tests can monkeypatch it; 5 existing tests updated accordingly
+
+**Direction flip replaces P&L blocking guard (alpaca_broker.py):**
+
+- Removed the fixed stop-loss/take-profit gate that permanently blocked opens on symbols where a live position had already hit its P&L threshold (e.g., a +24% winner would be stuck blocked indefinitely on the same symbol)
+- Replaced with a direction-flip: when a new open signal opposes an existing live position (long vs short), the existing position is closed first and then the new position is opened
+- Extended-hours flips use a limit order (entry price ± slippage); regular-hours flips use `close_position()`
+- If the flip-close fails, the new open is aborted and the error is recorded — prevents orphaned opposing positions
+- `_check_live_position_stop_loss` and `_check_live_position_take_profit` helpers remain in the file (and their unit tests still pass) but are no longer wired into the open gate
+- 2 new tests: `test_direction_flip_closes_existing_then_opens_new`, `test_direction_flip_blocks_open_if_close_fails`
+
+**PDT config relaxation (logic_config.json):**
+
+- `reentry_cooldown_minutes`: 120 → 30 (PDT-driven conservative window removed)
+- `min_same_day_exit_edge_pct`: 0.5 → 0.0 (same-day exit edge filter removed entirely)
+
+**Files changed:** `backend/services/alpaca_broker.py`, `backend/config/logic_config.json`, `backend/tests/test_alpaca_broker.py`, `backend/tests/test_paper_trading_enforcement.py`
+
+---
+
 # Release Notes — May 29, 2026
 
 ## Fix PDT Restrictions — Queue Blocked Orders for Next Market Open
