@@ -40,6 +40,13 @@ venvbk/
 .DS_Store
 Thumbs.db
 
+# IDE/editor directories
+.claude/
+.vscode/
+
+# Build output (root-level)
+.next/
+
 # Private planning docs — not for public repo
 ALPACA_TRADING_PLAN.md
 CLAUDE.md
