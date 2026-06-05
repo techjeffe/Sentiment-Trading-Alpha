@@ -1418,7 +1418,7 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
 
         # Then deduplicate within the cooldown-filtered list
 
-        for trade, event in pending:
+        for trade, event in cooldown_filtered:
             symbol = str(
                 getattr(trade, "execution_ticker", "") or
                 getattr(trade, "underlying", "")
@@ -1439,6 +1439,10 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
                 unique_closes.append((trade, event))
             else:
                 unique_opens.append((trade, event))
+
+        # Compute counts before dispatch summary
+        _cooldown_skipped = len(pending) - len(cooldown_filtered)
+        _dup_count = len(cooldown_filtered) - len(seen_keys)
 
         # ── DISPATCH: closes first, then opens ──────────────────────────
         _dispatch_summary = {"total": len(pending), "unique": len(seen_keys), "closes": len(unique_closes), "opens": len(unique_opens)}
@@ -1467,10 +1471,8 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
             ).upper()
             _last_order_times[symbol] = _now_utc_dispatch
 
-        if len(pending) != len(seen_keys):
-            _dup_count = len(pending) - len(seen_keys)
-            _cooldown_skipped = len(pending) - len(cooldown_filtered)
-            print(f"[alpaca] dedup summary: {len(pending)} total → {len(seen_keys)} unique ({_dup_count} duplicates skipped, {_cooldown_skipped} cooldown skipped)")
+        if len(cooldown_filtered) != len(seen_keys):
+            print(f"[alpaca] dedup summary: {len(pending)} total → {len(cooldown_filtered)} after cooldown → {len(seen_keys)} unique ({_dup_count} duplicates skipped, {_cooldown_skipped} cooldown skipped)")
 
     except ImportError:
         pass
