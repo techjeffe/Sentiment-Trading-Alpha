@@ -1241,43 +1241,8 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
             )
             return
 
-    # ── Trading window guard ─────────────────────────────────────────────────
-    if not (_is_regular_market_hours_now() or _is_extended_hours_now(config)):
-        from zoneinfo import ZoneInfo as _ZI
-        _et_str = datetime.now(_ZI("America/New_York")).strftime("%H:%M")
-        _win_reason = f"outside all trading windows at {_et_str} ET; market closed and Alpaca extended hours not active"
-        _win_side = side if event == "open" else ("buy" if direct_short else "sell")
-        _record_alpaca_order_skip(
-            db, paper_id, _win_side, symbol,
-            notional if event == "open" else None,
-            broker.mode, _win_reason,
-        )
-        print(f"[alpaca] skipping {event} for {symbol}: {_win_reason}")
-        return
-
     # ── Build order parameters ───────────────────────────────────────────────
     ext_hours  = _is_extended_hours_now(config)
-
-    # Guard: skip if outside every valid Alpaca trading window.
-    # Regular hours: 9:30 AM – 4:00 PM ET weekdays.
-    # Extended hours: 4:00 AM – 9:30 AM ET and 4:00 PM – 8:00 PM ET (when enabled).
-    # After 8 PM ET there is no valid window; a market order would be rejected
-    # by Alpaca with an "outside market hours" error.
-    if not ext_hours and not _is_regular_market_hours_now():
-        _now_et_ck = datetime.now(_ET)
-        _skip_side = "buy" if signal_type == "LONG" else "sell"
-        _record_alpaca_order_skip(
-            db, paper_id, _skip_side, symbol,
-            notional if event == "open" else None,
-            broker.mode,
-            f"outside all trading windows at {_now_et_ck.strftime('%H:%M ET')}; "
-            "market closed and Alpaca extended hours not active",
-        )
-        print(
-            f"[alpaca] skipping {event} for {symbol}: "
-            f"outside all trading windows ({_now_et_ck.strftime('%H:%M ET')})"
-        )
-        return
 
     slippage   = float(getattr(config, "alpaca_limit_slippage_pct", 0.002) or 0.002)
     limit_price: Optional[float] = None
