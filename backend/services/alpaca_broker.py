@@ -1096,6 +1096,162 @@ def _check_live_position_stop_loss(
         print(f"[alpaca] stop-loss check error for {symbol}: {exc}")
     return None
 
+def _sync_alpaca_fill_to_paper_trade(db, order) -> None:
+    """Sync a filled AlpacaOrder back to its PaperTrade record.
+
+    When an Alpaca order fills, update the PaperTrade with the actual fill
+    price and quantity so the paper trading dashboard reflects real execution.
+
+    For OPEN (buy) orders: updates entry_price and shares.
+    For CLOSE (sell) orders: updates exit_price and exited_at.
+    """
+    from database.models import PaperTrade
+
+    paper_trade_id = getattr(order, "paper_trade_id", None)
+    if paper_trade_id is None:
+        return
+
+    pt = db.query(PaperTrade).filter(PaperTrade.id == paper_trade_id).first()
+    if pt is None:
+        return
+
+    # Skip if already exited (close already synced)
+    if pt.exited_at is not None:
+        return
+
+    side = str(getattr(order, "side", "")).strip().lower()
+    fill_price = getattr(order, "filled_avg_price", None)
+    fill_qty = getattr(order, "filled_qty", None)
+
+    if fill_price is None:
+        return
+
+    try:
+        fill_price = float(fill_price)
+    except (TypeError, ValueError):
+        return
+
+    if fill_price <= 0:
+        return
+
+    # Determine if we've already synced this fill (avoid duplicate updates)
+    already_synced = False
+    if side == "buy" and pt.entry_price is not None:
+        try:
+            already_synced = abs(float(pt.entry_price) - fill_price) < 0.01
+        except (TypeError, ValueError):
+            already_synced = False
+    elif side == "sell" and pt.exit_price is not None:
+        try:
+            already_synced = abs(float(pt.exit_price) - fill_price) < 0.01
+        except (TypeError, ValueError):
+            already_synced = False
+
+    if already_synced:
+        return
+
+    if side == "buy":
+        # Update entry_price to actual Alpaca fill price
+        pt.entry_price = fill_price
+        # Update shares if we have a filled qty
+        if fill_qty is not None:
+            try:
+                pt.shares = float(fill_qty)
+            except (TypeError, ValueError):
+                pass
+        print(
+            f"[alpaca] sync: PaperTrade {paper_trade_id} ({pt.execution_ticker}) "
+            f"entry_price -> ${fill_price:.4f} (Alpaca fill)"
+        )
+    elif side == "sell":
+        # Update exit_price and mark as exited
+        pt.exit_price = fill_price
+        pt.exited_at = order.filled_at or datetime.now(timezone.utc)
+        print(
+            f"[alpaca] sync: PaperTrade {paper_trade_id} ({pt.execution_ticker}) "
+            f"exit_price -> ${fill_price:.4f}, exited_at -> {pt.exited_at}"
+        )
+
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        print(f"[alpaca] sync: failed to update PaperTrade {paper_trade_id}: {exc}")
+
+
+def sync_all_pending_fills(db) -> int:
+    """One-time sync for any AlpacaOrder rows that are filled but not yet synced to PaperTrade.
+
+    Scans all filled AlpacaOrders with a paper_trade_id and syncs any that haven't
+    been synced yet. Returns count of rows synced.
+    """
+    from database.models import AlpacaOrder, PaperTrade
+
+    filled_orders = (
+        db.query(AlpacaOrder)
+        .filter(
+            AlpacaOrder.status == "filled",
+            AlpacaOrder.paper_trade_id.isnot(None),
+            AlpacaOrder.filled_avg_price.isnot(None),
+        )
+        .all()
+    )
+
+    synced = 0
+    for order in filled_orders:
+        pt = db.query(PaperTrade).filter(PaperTrade.id == order.paper_trade_id).first()
+        if pt is None:
+            continue
+        if pt.exited_at is not None:
+            continue
+
+        side = str(getattr(order, "side", "")).strip().lower()
+        fill_price = float(getattr(order, "filled_avg_price", 0) or 0)
+        if fill_price <= 0:
+            continue
+
+        already_synced = False
+        if side == "buy" and pt.entry_price is not None:
+            try:
+                already_synced = abs(float(pt.entry_price) - fill_price) < 0.01
+            except (TypeError, ValueError):
+                already_synced = False
+        elif side == "sell" and pt.exit_price is not None:
+            try:
+                already_synced = abs(float(pt.exit_price) - fill_price) < 0.01
+            except (TypeError, ValueError):
+                already_synced = False
+
+        if already_synced:
+            continue
+
+        # Perform the sync (reuse the same logic)
+        if side == "buy":
+            pt.entry_price = fill_price
+            fill_qty = getattr(order, "filled_qty", None)
+            if fill_qty is not None:
+                try:
+                    pt.shares = float(fill_qty)
+                except (TypeError, ValueError):
+                    pass
+            print(f"[alpaca] sync-all: PaperTrade {pt.id} ({pt.execution_ticker}) entry_price -> ${fill_price:.4f}")
+        elif side == "sell":
+            pt.exit_price = fill_price
+            pt.exited_at = order.filled_at or datetime.now(timezone.utc)
+            print(f"[alpaca] sync-all: PaperTrade {pt.id} ({pt.execution_ticker}) exit_price -> ${fill_price:.4f}")
+
+        synced += 1
+
+    if synced:
+        try:
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            print(f"[alpaca] sync-all: commit failed: {exc}")
+
+    print(f"[alpaca] sync-all: completed, synced {synced} order(s)")
+    return synced
+
 
 def _check_live_position_take_profit(
     broker: "AlpacaBroker",
@@ -1601,6 +1757,9 @@ def poll_unfilled_orders(db) -> int:
                 except Exception:
                     pass
             order.raw_response = data
+            # Sync Alpaca fill back to PaperTrade so dashboard reflects real execution
+            if new_status == "filled":
+                _sync_alpaca_fill_to_paper_trade(db, order)
             updated += 1
         except httpx.HTTPStatusError as exc:
             oid = order.alpaca_order_id or order.client_order_id or order.id
