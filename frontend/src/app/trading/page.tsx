@@ -1,8 +1,9 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { AppHeader } from "@/components/AppHeader";
+import DispatchErrorBanner from "@/components/DispatchErrorBanner";
 import {
     TrendingUp, TrendingDown, Minus, RefreshCw, Trash2,
     DollarSign, BarChart2, Activity,
@@ -575,37 +576,25 @@ export default function TradingPage() {
 
     useEffect(() => { load(); loadAlpaca(); }, [load, loadAlpaca]);
 
+    const priceSymbols = useMemo(() => {
+        const strategySymbols = data?.open_positions.map(p => p.execution_ticker) ?? [];
+        const alpacaSymbols = alpacaLivePositions.map(p => p.symbol);
+        const all = Array.from(new Set([...strategySymbols, ...alpacaSymbols]));
+        return all.join(",");
+    }, [data?.open_positions, alpacaLivePositions]);
+
     useEffect(() => {
-        if (!data || data.open_positions.length === 0) return;
-        const symbols = Array.from(new Set(data.open_positions.map(p => p.execution_ticker))).join(",");
+        if (!priceSymbols) return;
         const fetchPrices = async () => {
             try {
-                const res = await fetch(`/api/prices?symbols=${symbols}`);
+                const res = await fetch(`/api/prices?symbols=${priceSymbols}`);
                 if (res.ok) setLivePrices(await res.json());
             } catch { }
         };
         fetchPrices();
         const interval = setInterval(fetchPrices, 10000);
         return () => clearInterval(interval);
-    }, [data]);
-
-    useEffect(() => {
-        if (alpacaLivePositions.length === 0) return;
-        const symbols = Array.from(new Set(alpacaLivePositions.map(p => p.symbol))).join(",");
-        const fetchPrices = async () => {
-            try {
-                const res = await fetch(`/api/prices?symbols=${symbols}`);
-                if (res.ok) {
-                    const priceData = await res.json();
-                    setLivePrices(prev => ({ ...prev, ...priceData }));
-                }
-            }
-            catch { }
-        };
-        fetchPrices();
-        const interval = setInterval(fetchPrices, 10000);
-        return () => clearInterval(interval);
-    }, [alpacaLivePositions]);
+    }, [priceSymbols]);
 
     const handleClosePosition = async (tradeId: number) => {
         if (!confirm("Are you sure you want to manually close this position?")) return;
@@ -726,7 +715,11 @@ export default function TradingPage() {
         }, 0);
     })();
     const brokerModes: BrokerMode[] = ["paper", "live"];
-    const configuredBrokerModes = brokerModes.filter((mode) => alpacaStatus?.secrets?.[mode]?.configured);
+    const configuredBrokerModes = useMemo(
+        () => brokerModes.filter((mode) => alpacaStatus?.secrets?.[mode]?.configured),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [alpacaStatus],
+    );
     const brokerOrderCounts = brokerModes.reduce((acc, mode) => {
         acc[mode] = alpacaOrders.filter((order) => order.trading_mode === mode).length;
         return acc;
@@ -761,11 +754,11 @@ export default function TradingPage() {
         }));
     const liveOpenRows: Array<{ symbol: string; side: string; fillPrice: number; qty: number; openedAt: string | null }> = [];
 
-    const availableTracks: TradingTrack[] = [
+    const availableTracks = useMemo<TradingTrack[]>(() => [
         "strategy_paper",
         ...(configuredBrokerModes.includes("paper") ? ["alpaca_paper" as const] : []),
         ...(configuredBrokerModes.includes("live") ? ["alpaca_live" as const] : []),
-    ];
+    ], [configuredBrokerModes]);
 
     useEffect(() => {
         if (!availableTracks.includes(preferredTrack)) {
@@ -775,6 +768,8 @@ export default function TradingPage() {
 
     return (
         <div className="min-h-screen" style={{ backgroundColor: "#0f172a", color: "#f8fafc" }}>
+            {/* Dispatch error banner — shows when live close-before-open fails */}
+            <DispatchErrorBanner />
             {/* Header */}
             <AppHeader
                 titleSlot={

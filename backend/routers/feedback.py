@@ -17,10 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from database.engine import get_db
+from database.engine import get_db, get_decision_log_db
 from services.feedback_analysis import (
-    analyze_trade_performance,
-    log_feedback_to_decision_log,
     run_weekly_analysis,
     should_run_analysis,
     _next_friday_4pm_ct,
@@ -49,7 +47,7 @@ class ScheduleResponse(BaseModel):
 
 @router.get("/latest", summary="Get latest feedback analysis")
 def get_latest_feedback(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_decision_log_db),
 ) -> Dict[str, Any]:
     """Return the latest weekly feedback analysis result."""
     from database.models import DecisionLogFeedback
@@ -92,7 +90,7 @@ def trigger_analysis(
 @router.post("/accept", summary="Accept parameter adjustments", response_model=AcceptAdjustmentResponse)
 def accept_adjustments(
     request: AcceptAdjustmentRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_decision_log_db),
 ) -> AcceptAdjustmentResponse:
     """
     User accepts specific parameter adjustments suggested by the feedback analysis.
@@ -141,11 +139,9 @@ def get_schedule(
 
 
 @router.get("/status", summary="Check if analysis should run now")
-def check_status(
-    db: Session = Depends(get_db),
-) -> Dict[str, Any]:
+def check_status() -> Dict[str, Any]:
     """Check if the weekly analysis should run at this moment."""
-    should = should_run_analysis(db)
+    should = should_run_analysis()
     next_run = _next_friday_4pm_ct()
 
     return {

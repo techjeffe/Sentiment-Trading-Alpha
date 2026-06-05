@@ -717,3 +717,48 @@ async def get_paginated_alpaca_closed_trades(
         "offset": offset,
         "limit": limit,
     }
+
+
+@router.get("/dispatch-errors")
+async def get_dispatch_errors(
+    _admin: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    """Return unacknowledged Alpaca dispatch errors (e.g. close-before-open failures)."""
+    from database.models import AlpacaDispatchError
+
+    errors = (
+        db.query(AlpacaDispatchError)
+        .filter(AlpacaDispatchError.acknowledged == False)
+        .order_by(AlpacaDispatchError.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": e.id,
+            "symbol": e.symbol,
+            "underlying": e.underlying,
+            "error_type": e.error_type,
+            "error_message": e.error_message,
+            "trading_mode": e.trading_mode,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in errors
+    ]
+
+
+@router.post("/dispatch-errors/{error_id}/acknowledge")
+async def acknowledge_dispatch_error(
+    error_id: int,
+    _admin: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    """Acknowledge (dismiss) a dispatch error so it no longer appears on the trading page."""
+    from database.models import AlpacaDispatchError
+
+    error = db.query(AlpacaDispatchError).filter(AlpacaDispatchError.id == error_id).first()
+    if error:
+        error.acknowledged = True
+        db.commit()
+        return {"acknowledged": True}
+    return {"acknowledged": False, "error": "not found"}

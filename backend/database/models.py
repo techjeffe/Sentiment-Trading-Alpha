@@ -472,6 +472,25 @@ class AlpacaOrder(Base):
     is_orphan             = Column(Boolean, nullable=False, default=False)
     orphan_acknowledged   = Column(Boolean, nullable=False, default=False)
 
+class AlpacaDispatchError(Base):
+    """
+    Tracks dispatch-level errors where a close could not be executed
+    before an open, potentially leaving opposing positions open.
+    These are surfaced on the trading page for user awareness.
+    """
+    __tablename__ = "alpaca_dispatch_errors"
+
+    id              = Column(Integer, primary_key=True)
+    symbol          = Column(String(20),  nullable=False)
+    underlying      = Column(String(20),  nullable=True)
+    error_type      = Column(String(50),  nullable=False)  # "close_failed", "conflict_detected"
+    error_message   = Column(Text,        nullable=True)
+    paper_trade_id  = Column(Integer,     nullable=True)
+    trading_mode    = Column(String(10),  nullable=False, default="live")
+    acknowledged    = Column(Boolean,     nullable=False, default=False)
+    created_at      = Column(DateTime(timezone=True), nullable=False, default=func.now())
+
+
 class AuditLog(Base):
     """
     Audit trail for state-changing operations.

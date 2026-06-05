@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session  # used by analyze_trade_performance / run_weekly_analysis
 
 _CT = ZoneInfo("America/Chicago")
 
@@ -34,37 +34,46 @@ def _next_friday_4pm_ct() -> datetime:
     return target
 
 
-def _last_run_timestamp(db: Session) -> Optional[str]:
+def _last_run_timestamp() -> Optional[str]:
     """Get the timestamp of the last feedback analysis run."""
+    from database.engine import DecisionLogSessionLocal
     from database.models import DecisionLogFeedback
 
-    row = db.query(DecisionLogFeedback).order_by(
-        DecisionLogFeedback.created_at.desc()
-    ).first()
-    if row:
-        return row.created_at.isoformat() if row.created_at else None
-    return None
+    db = DecisionLogSessionLocal()
+    try:
+        row = db.query(DecisionLogFeedback).order_by(
+            DecisionLogFeedback.created_at.desc()
+        ).first()
+        if row:
+            return row.created_at.isoformat() if row.created_at else None
+        return None
+    finally:
+        db.close()
 
 
-def _set_last_run_timestamp(db: Session, ts: str) -> None:
+def _set_last_run_timestamp(ts: str) -> None:
     """Record the timestamp of the latest feedback analysis run."""
+    from database.engine import DecisionLogSessionLocal
     from database.models import DecisionLogFeedback
 
-    # Use a special system entry
-    existing = db.query(DecisionLogFeedback).filter(
-        DecisionLogFeedback.feedback_type == "system_run_timestamp"
-    ).first()
-    if existing:
-        existing.timestamp_data = ts
-        existing.created_at = datetime.now(timezone.utc)
-    else:
-        entry = DecisionLogFeedback(
-            feedback_type="system_run_timestamp",
-            timestamp_data=ts,
-            created_at=datetime.now(timezone.utc),
-        )
-        db.add(entry)
-    db.commit()
+    db = DecisionLogSessionLocal()
+    try:
+        existing = db.query(DecisionLogFeedback).filter(
+            DecisionLogFeedback.feedback_type == "system_run_timestamp"
+        ).first()
+        if existing:
+            existing.timestamp_data = ts
+            existing.created_at = datetime.now(timezone.utc)
+        else:
+            entry = DecisionLogFeedback(
+                feedback_type="system_run_timestamp",
+                timestamp_data=ts,
+                created_at=datetime.now(timezone.utc),
+            )
+            db.add(entry)
+        db.commit()
+    finally:
+        db.close()
 
 
 def analyze_trade_performance(db: Session) -> Dict[str, Any]:
@@ -353,25 +362,27 @@ def analyze_trade_performance(db: Session) -> Dict[str, Any]:
     }
 
 
-def log_feedback_to_decision_log(db: Session, feedback: Dict[str, Any], request_id: str = "") -> None:
+def log_feedback_to_decision_log(feedback: Dict[str, Any], request_id: str = "") -> None:
     """Write feedback analysis results to the decision log."""
-    from database.models import DecisionLogTrade, DecisionLogFeedback
+    from database.engine import DecisionLogSessionLocal
+    from database.models import DecisionLogFeedback
 
-    # Create a system trade log entry for the feedback analysis
     now = datetime.now(timezone.utc)
+    db = DecisionLogSessionLocal()
+    try:
+        feedback_entry = DecisionLogFeedback(
+            feedback_type="weekly_analysis",
+            analysis_data=json.dumps(feedback, default=str),
+            created_at=now,
+        )
+        db.add(feedback_entry)
+        db.commit()
+        print(f"[feedback] analysis logged (patterns={len(feedback.get('patterns', []))}, suggestions={len(feedback.get('suggestions', []))})")
+    finally:
+        db.close()
 
-    feedback_entry = DecisionLogFeedback(
-        feedback_type="weekly_analysis",
-        analysis_data=json.dumps(feedback, default=str),
-        created_at=now,
-    )
-    db.add(feedback_entry)
-    db.commit()
 
-    print(f"[feedback] analysis logged (patterns={len(feedback.get('patterns', []))}, suggestions={len(feedback.get('suggestions', []))})")
-
-
-def should_run_analysis(db: Session) -> bool:
+def should_run_analysis() -> bool:
     """Check if the weekly analysis should run now (Friday 4pm CT)."""
     now_ct = datetime.now(_CT)
     # Only run on Fridays
@@ -381,7 +392,7 @@ def should_run_analysis(db: Session) -> bool:
     if not (16 <= now_ct.hour < 18):
         return False
     # Check if already run this week
-    last_run = _last_run_timestamp(db)
+    last_run = _last_run_timestamp()
     if last_run:
         try:
             last_dt = datetime.fromisoformat(last_run)
@@ -398,6 +409,6 @@ def run_weekly_analysis(db: Session, request_id: str = "") -> Dict[str, Any]:
     """Run the full weekly feedback analysis pipeline."""
     feedback = analyze_trade_performance(db)
     if feedback["status"] == "success":
-        log_feedback_to_decision_log(db, feedback, request_id)
-        _set_last_run_timestamp(db, datetime.now(timezone.utc).isoformat())
+        log_feedback_to_decision_log(feedback, request_id)
+        _set_last_run_timestamp(datetime.now(timezone.utc).isoformat())
     return feedback

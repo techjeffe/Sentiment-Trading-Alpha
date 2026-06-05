@@ -219,32 +219,16 @@ def market_status(allow_extended_hours: bool = True) -> Dict[str, Any]:
             return {"status": "overnight", "label": "Overnight (Sunday)", "tradeable": True}
         return {"status": "closed", "label": "Closed (Weekend)", "tradeable": False}
 
-    # ── Weekday sessions ──────────────────────────────────────────
-    # Overnight session: 8 PM – 4 AM (wrap-around past midnight)
+    # ── Weekday sessions — Alpaca is 24/5, always tradeable ──────
     if t >= _OVERNIGHT_OPEN or t < _OVERNIGHT_CLOSE:
-        return {
-            "status": "overnight",
-            "label": "Overnight" if allow_extended_hours else "Overnight (Trading Disabled)",
-            "tradeable": allow_extended_hours,
-        }
-    # Pre-market: 4 AM – 9:30 AM
+        return {"status": "overnight", "label": "Overnight", "tradeable": True}
     if _EXTENDED_OPEN <= t < _REGULAR_OPEN:
-        return {
-            "status": "pre-market",
-            "label": "Pre-Market" if allow_extended_hours else "Pre-Market (Trading Disabled)",
-            "tradeable": allow_extended_hours,
-        }
-    # Regular: 9:30 AM – 4 PM
+        return {"status": "pre-market", "label": "Pre-Market", "tradeable": True}
     if _REGULAR_OPEN <= t <= _REGULAR_CLOSE:
         return {"status": "open", "label": "Market Open", "tradeable": True}
-    # After-hours: 4 PM – 8 PM
     if _REGULAR_CLOSE < t <= _EXTENDED_CLOSE:
-        return {
-            "status": "after-hours",
-            "label": "After-Hours" if allow_extended_hours else "After-Hours (Trading Disabled)",
-            "tradeable": allow_extended_hours,
-        }
-    return {"status": "closed", "label": "Closed", "tradeable": False}
+        return {"status": "after-hours", "label": "After-Hours", "tradeable": True}
+    return {"status": "overnight", "label": "Overnight", "tradeable": True}
 
 
 def _window_active(pos, now: datetime) -> bool:
@@ -1465,6 +1449,8 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
         # ── DISPATCH: closes first, then opens ──────────────────────────
         _dispatch_summary = {"total": len(pending), "unique": len(seen_keys), "closes": len(unique_closes), "opens": len(unique_opens)}
         print(f"[alpaca] dispatch: {_dispatch_summary['total']} total → {_dispatch_summary['unique']} unique ({_dup_count} dupes, {_cooldown_skipped} cooldown)")
+
+        # ── Phase 1: Dispatch all closes ────────────────────────────────
         for trade, event in unique_closes:
             _sym = str(getattr(trade, "execution_ticker", "") or getattr(trade, "underlying", "?")).upper()
             print(f"[alpaca] dispatching close: {_sym} (paper_id={getattr(trade, 'id', '?')})")
@@ -1472,14 +1458,117 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
                 maybe_execute_alpaca_order(db, trade, event, config)
             except Exception as _exc:
                 print(f"[alpaca] dispatch ERROR close {_sym}: {_exc}")
+
+        # ── Phase 2: Pre-open live position check + retry on conflict ──
+        # Before dispatching any opens, check Alpaca's live positions for
+        # conflicts with the positions we're about to open.  If a conflicting
+        # position exists (e.g. TQQQ still open when we want to open SQQQ),
+        # retry the close up to 3 times with delays before giving up.
+        # This prevents simultaneous opposing positions in the live account.
+        _OPEN_RETRY_MAX = 3
+        _OPEN_RETRY_DELAY = 5.0  # seconds
+
+        try:
+            from services.alpaca_broker import (
+                get_broker_from_keychain,
+                _has_conflicting_live_position,
+                _dispatch_close_with_retry,
+            )
+            _alpaca_mode = str(getattr(config, "alpaca_execution_mode", "off") or "off")
+            _live_broker = get_broker_from_keychain(mode=_alpaca_mode) if _alpaca_mode != "off" else None
+        except Exception:
+            _live_broker = None
+
+        _skipped_opens = 0
         for trade, event in unique_opens:
             _sym = str(getattr(trade, "execution_ticker", "") or getattr(trade, "underlying", "?")).upper()
+            _signal_type = str(getattr(trade, "signal_type", "") or "").upper()
+            _underlying = str(getattr(trade, "underlying", "") or "").upper()
+
+            # Check for conflicting live position
+            _conflict = None
+            if _live_broker:
+                _conflict = _has_conflicting_live_position(_live_broker, _sym, _signal_type)
+
+            if _conflict:
+                _conflict_sym = _conflict.get("symbol", "unknown")
+                _conflict_qty = _conflict.get("qty", "unknown")
+                print(
+                    f"[alpaca] CONFLICT: {_sym} ({_signal_type}) conflicts with live "
+                    f"position {_conflict_sym} (qty={_conflict_qty}) — "
+                    f"retrying close before open (max {_OPEN_RETRY_MAX} attempts)"
+                )
+
+                # Find the paper trade to close (the one with the conflicting ticker)
+                _close_trade = None
+                for ct, ce in unique_closes:
+                    ct_sym = str(getattr(ct, "execution_ticker", "") or "").upper()
+                    if ct_sym == _conflict_sym:
+                        _close_trade = ct
+                        break
+
+                if _close_trade is None:
+                    # No close in this dispatch cycle — try to find it in pending
+                    for pt, pe in pending:
+                        pt_sym = str(getattr(pt, "execution_ticker", "") or "").upper()
+                        if pt_sym == _conflict_sym and pe == "close":
+                            _close_trade = pt
+                            break
+
+                if _close_trade is None:
+                    print(
+                        f"[alpaca] SKIP open {_sym}: conflict with {_conflict_sym} "
+                        f"but no close order found to retry"
+                    )
+                    _skipped_opens += 1
+                    continue
+
+                # Retry the close with exponential backoff
+                _close_success = False
+                for attempt in range(1, _OPEN_RETRY_MAX + 1):
+                    try:
+                        _dispatch_close_with_retry(
+                            db, _close_trade, _live_broker, config,
+                            max_retries=1, retry_delay_seconds=0,
+                        )
+                        # Verify the conflict is resolved
+                        _conflict = _has_conflicting_live_position(_live_broker, _sym, _signal_type)
+                        if not _conflict:
+                            _close_success = True
+                            print(f"[alpaca] close retry {attempt} succeeded for {_conflict_sym}")
+                            break
+                        else:
+                            print(
+                                f"[alpaca] close retry {attempt}/{_OPEN_RETRY_MAX} for "
+                                f"{_conflict_sym} — conflict still present, retrying in {_OPEN_RETRY_DELAY}s"
+                            )
+                    except Exception as _retry_exc:
+                        print(f"[alpaca] close retry {attempt}/{_OPEN_RETRY_MAX} for {_conflict_sym} failed: {_retry_exc}")
+
+                    if attempt < _OPEN_RETRY_MAX:
+                        print(f"[alpaca] waiting {_OPEN_RETRY_DELAY}s before next retry...")
+                        import time as _time
+                        _time.sleep(_OPEN_RETRY_DELAY)
+
+                if not _close_success:
+                    print(
+                        f"[alpaca] SKIP open {_sym}: all {_OPEN_RETRY_MAX} close retries failed "
+                        f"for {_conflict_sym} — dispatch error recorded"
+                    )
+                    _skipped_opens += 1
+                    continue
+
+            # No conflict (or conflict resolved) — dispatch the open
             print(f"[alpaca] dispatching open: {_sym} (paper_id={getattr(trade, 'id', '?')})")
             try:
                 maybe_execute_alpaca_order(db, trade, event, config)
             except Exception as _exc:
                 print(f"[alpaca] dispatch ERROR open {_sym}: {_exc}")
-        print(f"[alpaca] dispatch complete: {_dispatch_summary['closes']} closes, {_dispatch_summary['opens']} opens attempted")
+
+        if _skipped_opens > 0:
+            print(f"[alpaca] skipped {_skipped_opens} open(s) due to unresolved conflicts")
+
+        print(f"[alpaca] dispatch complete: {_dispatch_summary['closes']} closes, {_dispatch_summary['opens'] - _skipped_opens} opens attempted ({_skipped_opens} skipped)")
 
         # ── RECORD LAST ORDER TIMES ─────────────────────────────────────
         for trade, event in seen_keys.values():

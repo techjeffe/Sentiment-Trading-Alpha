@@ -356,6 +356,27 @@ def migrate():
                     conn.exec_driver_sql(f"ALTER TABLE alpaca_orders ADD COLUMN {column_name} {column_type} NOT NULL DEFAULT {default_value}")
                     conn.commit()
 
+        # ── alpaca_dispatch_errors table ────────────────────────────────────
+        if "alpaca_dispatch_errors" not in tables:
+            print("Creating alpaca_dispatch_errors table...")
+            conn.execute(text("""
+                CREATE TABLE alpaca_dispatch_errors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol VARCHAR(20) NOT NULL,
+                    underlying VARCHAR(20),
+                    error_type VARCHAR(50) NOT NULL,
+                    error_message TEXT,
+                    paper_trade_id INTEGER,
+                    trading_mode VARCHAR(10) NOT NULL DEFAULT 'live',
+                    acknowledged BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_alpaca_dispatch_errors_acknowledged ON alpaca_dispatch_errors (acknowledged)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_alpaca_dispatch_errors_created_at ON alpaca_dispatch_errors (created_at)"))
+            conn.commit()
+            print("alpaca_dispatch_errors table created.")
+
     # ── Decision Log tables ──────────────────────────────────────────────
     # Created via metadata.create_all on the decision_log engine during
     # backend startup.  No manual migration steps needed — the tables are

@@ -689,6 +689,184 @@ def _get_live_symbol_position(broker: "AlpacaBroker", symbol: str) -> Optional[D
     }
 
 
+def _get_all_live_positions(broker: "AlpacaBroker") -> List[Dict[str, Any]]:
+    """Return all live positions from Alpaca as a list of dicts."""
+    try:
+        positions = broker.get_positions()
+        if not isinstance(positions, list):
+            return []
+        result = []
+        for pos in positions:
+            if not isinstance(pos, dict):
+                continue
+            qty_raw = pos.get("qty") or pos.get("available_shares")
+            qty = None
+            try:
+                qty = float(qty_raw) if qty_raw is not None else None
+            except (TypeError, ValueError):
+                qty = None
+            if qty is not None and abs(qty) > 0:
+                result.append({
+                    "symbol": str(pos.get("symbol", "")).upper().strip(),
+                    "qty": abs(qty),
+                    "side": str(pos.get("side") or "").strip().lower(),
+                    "market_value": abs(float(pos.get("market_value") or 0)),
+                })
+        return result
+    except Exception:
+        return []
+
+
+def _has_conflicting_live_position(
+    broker: "AlpacaBroker",
+    execution_ticker: str,
+    signal_type: str,
+) -> Optional[Dict[str, Any]]:
+    """Check if there's a conflicting live position for the same underlying.
+
+    Returns the conflicting position dict if found, None otherwise.
+    A conflict exists when:
+    - The execution ticker itself is a conflicting position (same underlying, opposite direction)
+    - The signal is SHORT but there's a LONG position in the same underlying's bull ETF
+    - The signal is LONG but there's a SHORT position in the same underlying's bear ETF
+    """
+    from services.trading_instruments import INSTRUMENT_SPECS
+
+    ticker = str(execution_ticker or "").upper().strip()
+    stype = str(signal_type or "").upper()
+
+    # Find which underlying this ticker belongs to
+    underlying = None
+    ticker_bucket = None  # "bull" or "bear"
+    for _under, _spec in INSTRUMENT_SPECS.items():
+        _under = _under.upper()
+        for _bucket, _tickers in _spec.get("bull", {}).items():
+            if str(_tickers).upper() == ticker:
+                underlying = _under
+                ticker_bucket = "bull"
+                break
+        if underlying:
+            break
+        for _bucket, _tickers in _spec.get("bear", {}).items():
+            if str(_tickers).upper() == ticker:
+                underlying = _under
+                ticker_bucket = "bear"
+                break
+        if underlying:
+            break
+
+    if not underlying:
+        # Not a known instrument — check if the ticker itself is open
+        live_pos = _get_live_symbol_position(broker, ticker)
+        if live_pos and live_pos.get("qty", 0) > 0:
+            return live_pos
+        return None
+
+    # Get all live positions
+    all_positions = _get_all_live_positions(broker)
+
+    # Check each live position for conflict
+    for pos in all_positions:
+        pos_ticker = pos["symbol"]
+        if pos_ticker == ticker:
+            continue  # Skip the position we're about to open
+
+        # Find which underlying this position belongs to
+        pos_underlying = None
+        pos_bucket = None
+        for _under, _spec in INSTRUMENT_SPECS.items():
+            _under = _under.upper()
+            for _bucket, _tickers in _spec.get("bull", {}).items():
+                if str(_tickers).upper() == pos_ticker:
+                    pos_underlying = _under
+                    pos_bucket = "bull"
+                    break
+            if pos_underlying:
+                break
+            for _bucket, _tickers in _spec.get("bear", {}).items():
+                if str(_tickers).upper() == pos_ticker:
+                    pos_underlying = _under
+                    pos_bucket = "bear"
+                    break
+            if pos_underlying:
+                break
+
+        if pos_underlying != underlying:
+            continue  # Different underlying — no conflict
+
+        # Same underlying — check for opposing direction
+        if ticker_bucket and pos_bucket and ticker_bucket != pos_bucket:
+            return pos  # Opposing bull/bear for same underlying
+
+    return None
+
+
+def _dispatch_close_with_retry(
+    db,
+    paper_trade,
+    broker,
+    config,
+    max_retries: int = 3,
+    retry_delay_seconds: float = 5.0,
+) -> bool:
+    """Dispatch a close order with retry logic.
+
+    Returns True if the close was successfully dispatched, False otherwise.
+    Records a dispatch error in the database if all retries fail.
+    """
+    from database.models import AlpacaDispatchError
+
+    symbol = str(getattr(paper_trade, "execution_ticker", "") or getattr(paper_trade, "underlying", "")).upper()
+    paper_id = getattr(paper_trade, "id", None)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            maybe_execute_alpaca_order(db, paper_trade, "close", config)
+            # Check if the order was actually recorded
+            from database.models import AlpacaOrder as _AO
+            order = db.query(_AO).filter(
+                _AO.paper_trade_id == paper_id,
+                _AO.symbol == symbol,
+                _AO.side == "sell",
+            ).order_by(_AO.created_at.desc()).first()
+            if order:
+                print(f"[alpaca] close dispatched for {symbol} (attempt {attempt}, order_id={order.id})")
+                return True
+            # If no order recorded, the close may have been skipped (dust, etc.)
+            # Check if the position is actually closed
+            live_pos = _get_live_symbol_position(broker, symbol)
+            if live_pos and live_pos.get("qty", 0) <= 0:
+                print(f"[alpaca] close confirmed for {symbol} (position already flat, attempt {attempt})")
+                return True
+        except Exception as exc:
+            print(f"[alpaca] close attempt {attempt}/{max_retries} for {symbol} failed: {exc}")
+
+        if attempt < max_retries:
+            print(f"[alpaca] retrying close for {symbol} in {retry_delay_seconds}s (attempt {attempt + 1})...")
+            import time as _time
+            _time.sleep(retry_delay_seconds)
+
+    # All retries failed — record dispatch error
+    try:
+        live_pos = _get_live_symbol_position(broker, symbol)
+        qty_info = f" (live qty={live_pos.get('qty') if live_pos else 'unknown'})" if live_pos else ""
+        dispatch_error = AlpacaDispatchError(
+            symbol=symbol,
+            underlying=str(getattr(paper_trade, "underlying", "") or ""),
+            error_type="close_failed",
+            error_message=f"Failed to close {symbol} after {max_retries} attempts{qty_info}",
+            paper_trade_id=paper_id,
+            trading_mode=str(getattr(config, "alpaca_execution_mode", "live") or "live"),
+        )
+        db.add(dispatch_error)
+        db.commit()
+        print(f"[alpaca] DISPATCH ERROR recorded: {dispatch_error.error_message}")
+    except Exception as db_exc:
+        print(f"[alpaca] failed to record dispatch error: {db_exc}")
+
+    return False
+
+
 def _configured_live_execution_symbols(config) -> Set[str]:
     """Return execution tickers this app is allowed to trade for the current config.
 

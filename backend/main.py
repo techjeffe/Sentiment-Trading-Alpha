@@ -233,10 +233,10 @@ async def _weekly_feedback_scheduler_loop():
     from services.feedback_analysis import should_run_analysis, run_weekly_analysis
 
     while True:
-        db = SessionLocal()
         try:
-            if should_run_analysis(db):
+            if should_run_analysis():
                 print("[feedback] Weekly analysis window active — running performance analysis...")
+                db = SessionLocal()
                 try:
                     result = await asyncio.to_thread(run_weekly_analysis, db, request_id="weekly_schedule")
                     if result.get("status") == "success":
@@ -246,12 +246,12 @@ async def _weekly_feedback_scheduler_loop():
                     else:
                         print(f"[feedback] Weekly analysis: {result.get('message', 'no data')}")
                 except Exception as exc:
+                    db.rollback()
                     print(f"[feedback] Weekly analysis error: {exc}")
+                finally:
+                    db.close()
         except Exception as exc:
-            db.rollback()
             print(f"[feedback] Scheduler error: {exc}")
-        finally:
-            db.close()
 
         await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
 
