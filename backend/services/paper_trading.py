@@ -1380,6 +1380,11 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
     if not pending or config is None:
         return
     try:
+        from services.alpaca_broker import maybe_execute_alpaca_order, retry_window_skipped_orders
+        retry_window_skipped_orders(db, config)
+    except Exception as _retry_exc:
+        print(f"[alpaca] retry_window_skipped_orders failed (non-fatal): {_retry_exc}")
+    try:
         from services.alpaca_broker import maybe_execute_alpaca_order
 
         # ── DEDUPLICATION PASS ──────────────────────────────────────────

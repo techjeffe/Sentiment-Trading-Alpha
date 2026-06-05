@@ -253,6 +253,7 @@ def test_extended_hours_orders_use_limit_and_qty(db_session, monkeypatch, event,
     broker = DummyBroker(mode="live")
     monkeypatch.setattr("services.alpaca_broker.get_broker_from_keychain", lambda mode=None: broker)
     monkeypatch.setattr("services.alpaca_broker._is_extended_hours_now", lambda cfg=None: True)
+    monkeypatch.setattr("services.alpaca_broker._is_regular_market_hours_now", lambda: True)
     monkeypatch.setattr("services.alpaca_broker._check_circuit_breakers", lambda db, cfg, pending_notional=0.0: None)
 
     maybe_execute_alpaca_order(db_session, paper_trade, event, config)
@@ -355,6 +356,7 @@ def test_extended_hours_open_uses_remaining_capacity_qty(db_session, monkeypatch
     broker.position = {"qty": "0.4", "market_value": "60.00", "side": "long"}
     monkeypatch.setattr("services.alpaca_broker.get_broker_from_keychain", lambda mode=None: broker)
     monkeypatch.setattr("services.alpaca_broker._is_extended_hours_now", lambda cfg=None: True)
+    monkeypatch.setattr("services.alpaca_broker._is_regular_market_hours_now", lambda: True)
     monkeypatch.setattr("services.alpaca_broker._check_circuit_breakers", lambda db, cfg, pending_notional=0.0: None)
 
     maybe_execute_alpaca_order(db_session, paper_trade, "open", config)

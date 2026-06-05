@@ -510,9 +510,11 @@ class SentimentEngine:
         #   n_sub=0, n_blu=1 → −0.33 (−0.48 unconfirmed)
         per_item_weight = float(_ss.get("bluster_per_item_weight", 0.33))
         raw_bluster = (n_sub - n_blu) * per_item_weight
-        # Mixed-signal articles should pull toward neutral, not auto-negative.
-        # The old ratio formula needed a mixed_signal_floor to compensate for
-        # its binary behavior — now handled naturally by the linear formula.
+        # When both bluster AND substance are present, the article is hedging —
+        # apply the same skepticism penalty as unconfirmed events regardless of
+        # confirmed flag, since rhetorical hedging undermines substance credibility.
+        if n_blu > 0 and n_sub > 0:
+            raw_bluster -= _ss["unconfirmed_bluster_penalty"]
         if not confirmed:
             raw_bluster -= _ss["unconfirmed_bluster_penalty"]
         bluster_score = round(max(-1.0, min(1.0, raw_bluster)), 3)

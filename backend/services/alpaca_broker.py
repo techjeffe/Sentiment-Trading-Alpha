@@ -1241,6 +1241,20 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
             )
             return
 
+    # ── Trading window guard ─────────────────────────────────────────────────
+    if not (_is_regular_market_hours_now() or _is_extended_hours_now(config)):
+        from zoneinfo import ZoneInfo as _ZI
+        _et_str = datetime.now(_ZI("America/New_York")).strftime("%H:%M")
+        _win_reason = f"outside all trading windows at {_et_str} ET; market closed and Alpaca extended hours not active"
+        _win_side = side if event == "open" else ("buy" if direct_short else "sell")
+        _record_alpaca_order_skip(
+            db, paper_id, _win_side, symbol,
+            notional if event == "open" else None,
+            broker.mode, _win_reason,
+        )
+        print(f"[alpaca] skipping {event} for {symbol}: {_win_reason}")
+        return
+
     # ── Build order parameters ───────────────────────────────────────────────
     ext_hours  = _is_extended_hours_now(config)
 
@@ -1510,3 +1524,63 @@ def reconcile_on_startup(db) -> None:
                 )
     if changed:
         db.commit()
+
+
+# ── Overnight retry ───────────────────────────────────────────────────────────
+
+def retry_window_skipped_orders(db, config) -> None:
+    """
+    Re-dispatch paper trade opens that were skipped solely because they arrived
+    outside all valid Alpaca trading windows (e.g. 11 PM ET). Called at the top
+    of each dispatch cycle so overnight paper opens execute when the market opens.
+
+    Only fires when we are now inside a valid window. Skips any paper trade that
+    has already been exited or already has a successful open order on record.
+    """
+    from database.models import AlpacaOrder, PaperTrade
+
+    if not (_is_regular_market_hours_now() or _is_extended_hours_now(config)):
+        return
+
+    try:
+        stranded = (
+            db.query(AlpacaOrder)
+            .filter(
+                AlpacaOrder.status == "skipped",
+                AlpacaOrder.side == "buy",
+                AlpacaOrder.error_message.like("%outside all trading windows%"),
+            )
+            .all()
+        )
+    except Exception as exc:
+        print(f"[alpaca] retry_window_skipped_orders: query failed: {exc}")
+        return
+
+    for skipped_order in stranded:
+        pt_id = skipped_order.paper_trade_id
+        if pt_id is None:
+            continue
+
+        pt = db.query(PaperTrade).filter(PaperTrade.id == pt_id).first()
+        if pt is None or pt.exited_at is not None:
+            continue
+
+        already_placed = (
+            db.query(AlpacaOrder)
+            .filter(
+                AlpacaOrder.paper_trade_id == pt_id,
+                AlpacaOrder.status.in_(("filled", "accepted", "partially_filled")),
+            )
+            .first()
+        )
+        if already_placed:
+            continue
+
+        symbol = str(
+            getattr(pt, "execution_ticker", "") or getattr(pt, "underlying", "")
+        ).upper()
+        print(f"[alpaca] retrying window-skipped open for {symbol} (paper_id={pt_id})")
+        try:
+            maybe_execute_alpaca_order(db, pt, "open", config)
+        except Exception as exc:
+            print(f"[alpaca] retry_window_skipped_orders: dispatch failed for {symbol}: {exc}")

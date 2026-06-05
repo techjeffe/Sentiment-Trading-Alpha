@@ -198,25 +198,24 @@ class TestAlpacaOrderSkipRecord(unittest.TestCase):
 
     def test_record_alpaca_order_skip_called(self):
         """_record_alpaca_order_skip should create an order with skipped status."""
-        # Mock database.models before importing alpaca_broker functions that use it
+        from unittest.mock import patch
         mock_alpaca_order_cls = MagicMock()
         mock_alpaca_order_cls.return_value.status = "skipped"
         fake_db_models = MagicMock()
         fake_db_models.AlpacaOrder = mock_alpaca_order_cls
-        sys.modules['database'] = MagicMock()
-        sys.modules['database.models'] = fake_db_models
 
-        from services.alpaca_broker import _record_alpaca_order_skip
+        with patch.dict('sys.modules', {'database': MagicMock(), 'database.models': fake_db_models}):
+            from services.alpaca_broker import _record_alpaca_order_skip
 
-        db = MagicMock()
-        _record_alpaca_order_skip(
-            db, paper_trade_id=1, side="buy", symbol="USO",
-            notional=100.0, trading_mode="live",
-            reason="test_reason", client_order_id="test-001",
-        )
-        # Should have called db.add (the order is created internally)
-        db.add.assert_called_once()
-        db.commit.assert_called_once()
+            db = MagicMock()
+            _record_alpaca_order_skip(
+                db, paper_trade_id=1, side="buy", symbol="USO",
+                notional=100.0, trading_mode="live",
+                reason="test_reason", client_order_id="test-001",
+            )
+            # Should have called db.add (the order is created internally)
+            db.add.assert_called_once()
+            db.commit.assert_called_once()
 
 
 if __name__ == "__main__":
