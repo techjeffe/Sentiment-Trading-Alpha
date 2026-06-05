@@ -256,106 +256,6 @@ async def _weekly_feedback_scheduler_loop():
         await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
 
 
-async def _pdt_queue_processor_loop():
-    """Process PDT-queued orders at market open (9:30 AM ET).
-    
-    Every 5 minutes, checks if it's between 9:25-9:35 AM ET on a weekday.
-    If so, replays all queued orders with their downgraded trading types.
-    Orders that fail to replay are marked as 'failed' with the error.
-    """
-    from datetime import datetime, timezone
-    from zoneinfo import ZoneInfo
-
-    et = ZoneInfo("America/New_York")
-
-    while True:
-        try:
-            now_et = datetime.now(et)
-            is_weekday = now_et.weekday() < 5  # Mon=0 .. Fri=4
-            hour_min = now_et.hour * 100 + now_et.minute
-            # Market open window: 9:25-9:35 AM ET (covers pre-market prep)
-            is_open_window = 925 <= hour_min <= 935
-
-            if is_weekday and is_open_window:
-                db = SessionLocal()
-                try:
-                    from database.models import PdtpendingOrder
-                    queued = db.query(PdtpendingOrder).filter(
-                        PdtpendingOrder.status == "queued"
-                    ).order_by(PdtpendingOrder.queued_at.asc()).all()
-
-                    if queued:
-                        print(f"[alpaca/pdt] Market open window — processing {len(queued)} queued order(s)")
-                        for entry in queued:
-                            _replay_pdt_order(db, entry)
-                    else:
-                        print(f"[alpaca/pdt] Market open window — no queued orders")
-                finally:
-                    db.close()
-        except Exception as exc:
-            print(f"[alpaca/pdt] Queue processor error: {exc}")
-
-        await asyncio.sleep(300)  # Check every 5 minutes
-
-
-def _replay_pdt_order(db, entry) -> None:
-    """
-    Replay a single PDT-queued order.
-    Calls the Alpaca API with the stored parameters.
-    On success: marks as 'replayed'. On failure: marks as 'failed'.
-    """
-    from database.models import AlpacaOrder
-    from services.app_config import get_or_create_app_config
-    from services.keychain import get_alpaca_keychain
-
-    try:
-        broker = get_alpaca_keychain(mode="live")
-        if broker is None:
-            entry.status = "failed"
-            entry.error_message = "broker could not be initialized"
-            db.commit()
-            print(f"[alpaca/pdt] failed to replay {entry.symbol}: no broker")
-            return
-
-        # Build the order — use downgraded trading type if applicable
-        order_type = entry.order_type or "market"
-        kwargs = {
-            "symbol": entry.symbol,
-            "notional": entry.notional,
-            "order_type": order_type,
-            "time_in_force": entry.time_in_force or "day",
-            "limit_price": entry.limit_price,
-            "extended_hours": entry.extended_hours,
-        }
-
-        # For swap orders (downgraded from SWING to POSITION), we still send
-        # the same Alpaca order — the downgrade is informational for the paper
-        # trading side. The Alpaca order itself doesn't know about holding periods.
-        if entry.side == "buy":
-            result = broker.submit_buy_order(**kwargs)
-        else:
-            result = broker.submit_sell_order(**kwargs)
-
-        if result and result.get("success"):
-            entry.status = "replayed"
-            entry.replayed_at = datetime.now(timezone.utc)
-            entry.raw_response = result.get("response")
-            print(f"[alpaca/pdt] replayed {entry.symbol} ({entry.side}, ${entry.notional:.2f})")
-        else:
-            entry.status = "failed"
-            entry.error_message = result.get("error", "unknown") if result else "no response"
-            entry.raw_response = result
-            print(f"[alpaca/pdt] failed to replay {entry.symbol}: {entry.error_message}")
-
-        db.commit()
-
-    except Exception as exc:
-        entry.status = "failed"
-        entry.error_message = str(exc)
-        db.rollback()
-        print(f"[alpaca/pdt] error replaying {entry.symbol}: {exc}")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager for startup and shutdown events."""
@@ -363,7 +263,6 @@ async def lifespan(app: FastAPI):
     pnl_scheduler_task       = None
     alpaca_poll_task         = None
     feedback_scheduler_task  = None
-    pdt_queue_task           = None
     telegram_bot_task        = None
 
     print("=" * 60)
@@ -442,9 +341,6 @@ async def lifespan(app: FastAPI):
     feedback_scheduler_task = asyncio.create_task(_weekly_feedback_scheduler_loop())
     print("Weekly feedback analysis scheduler started (Friday 4pm CT, every 30 min check)")
 
-    pdt_queue_task = asyncio.create_task(_pdt_queue_processor_loop())
-    print("PDT queue processor started (market open replay, 5 min check)")
-
     try:
         from services.app_config import get_or_create_app_config
         from services.secret_store import get_telegram_credentials
@@ -486,7 +382,6 @@ async def lifespan(app: FastAPI):
         (pnl_scheduler_task, "pnl_scheduler"),
         (alpaca_poll_task, "alpaca_poll"),
         (feedback_scheduler_task, "feedback_scheduler"),
-        (pdt_queue_task, "pdt_queue"),
         (telegram_bot_task, "telegram_bot"),
     ]:
         if task:

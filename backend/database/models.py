@@ -419,13 +419,6 @@ class AppConfig(Base):
     alpaca_limit_slippage_pct     = Column(Float,       nullable=False, default=0.002)
     alpaca_daily_loss_limit_usd   = Column(Float,       nullable=True,  default=None)
     alpaca_max_consecutive_losses = Column(Integer,     nullable=True,  default=3)
-    alpaca_high_conviction_override_enabled = Column(Boolean, nullable=False, default=False)
-
-    # ── PDT-specific settings ────────────────────────────────────────────────
-    alpaca_pdt_queue_enabled = Column(Boolean, nullable=False, default=True)  # queue blocked orders for next market open
-    alpaca_pdt_downgrade_swing_to_position = Column(Boolean, nullable=False, default=True)  # downgrade SWING→POSITION to avoid same-day exits
-    alpaca_pdt_max_queue_size = Column(Integer, nullable=False, default=10)  # max pending orders before oldest are dropped
-    alpaca_pdt_notify_on_limit = Column(Boolean, nullable=False, default=True)  # flag for user review when PDT limit hit
 
     last_analysis_started_at = Column(DateTime(timezone=True), nullable=True)
     last_analysis_completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -478,42 +471,6 @@ class AlpacaOrder(Base):
     created_at        = Column(DateTime(timezone=True), nullable=False, default=func.now())
     is_orphan             = Column(Boolean, nullable=False, default=False)
     orphan_acknowledged   = Column(Boolean, nullable=False, default=False)
-
-class PdtpendingOrder(Base):
-    """
-    Queue for Alpaca orders blocked by PDT restrictions.
-    Orders are stored here and replayed at the next market open (9:30 AM ET).
-    Each row tracks the original paper trade, the downgraded holding period,
-    and whether the order was successfully replayed.
-    """
-    __tablename__ = "pdt_pending_orders"
-
-    id = Column(Integer, primary_key=True, index=True)
-    paper_trade_id = Column(Integer, ForeignKey("paper_trades.id"), nullable=True, index=True)
-    symbol = Column(String(20), nullable=False, index=True)
-    side = Column(String(10), nullable=False)  # buy | sell
-    notional = Column(Float, nullable=True)
-    qty = Column(Float, nullable=True)
-    order_type = Column(String(20), nullable=False, default="market")
-    time_in_force = Column(String(10), nullable=False, default="day")
-    limit_price = Column(Float, nullable=True)
-    extended_hours = Column(Boolean, nullable=False, default=False)
-    original_conviction = Column(String(20), nullable=True)  # HIGH, MEDIUM, LOW
-    original_trading_type = Column(String(20), nullable=True)  # POSITION, SWING, VOLATILE_EVENT, SCALP
-    downgraded_to_trading_type = Column(String(20), nullable=True)  # e.g., POSITION (was SWING)
-    downgraded_reason = Column(Text, nullable=True)  # "downgraded from SWING to avoid same-day exit"
-    queued_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
-    replayed_at = Column(DateTime(timezone=True), nullable=True)
-    status = Column(String(20), nullable=False, default="queued")  # queued | replayed | expired | failed
-    raw_response = Column(JSON, nullable=True)
-    error_message = Column(Text, nullable=True)
-
-    __table_args__ = (
-        Index("ix_pdt_pending_orders_status", "status"),
-        Index("ix_pdt_pending_orders_queued_at", "queued_at"),
-        Index("ix_pdt_pending_orders_symbol_status", "symbol", "status"),
-    )
-
 
 class AuditLog(Base):
     """

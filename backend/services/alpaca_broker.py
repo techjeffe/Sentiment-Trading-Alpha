@@ -736,7 +736,8 @@ def _is_live_symbol_configured(config, paper_trade) -> bool:
     if underlying and underlying in allowed:
         return True
     # Allow inverse ETFs for SHORT signals even if the ETF itself isn't in tracked symbols
-    if symbol and symbol.upper() == underlying.upper():
+    signal_type = str(getattr(paper_trade, "signal_type", "")).upper().strip()
+    if signal_type == "SHORT" and symbol and symbol.upper() == underlying.upper():
         # Direct short — check if an inverse ETF is mapped
         inverse_etf = INVERSE_ETF_MAP.get(symbol)
         if inverse_etf and inverse_etf in allowed:
@@ -946,149 +947,6 @@ def _check_live_position_take_profit(
     return None
 
 
-def _get_pdt_block_reason(broker: "AlpacaBroker", paper_trade, event: str, conviction_level: Optional[str] = None, high_conviction_override: bool = False) -> Optional[str]:
-    """
-    Return a human-readable reason when the order should be blocked to avoid
-    pattern day trading issues on sub-$25k live accounts.
-
-    If conviction_level is 'HIGH' and high_conviction_override is True,
-    entry ("open") orders bypass the PDT gate — HIGH conviction trades are
-    allowed through even on PDT-flagged accounts.
-    """
-    try:
-        account = broker.get_account()
-    except Exception as exc:
-        print(f"[alpaca] PDT check: account fetch failed, skipping check: {exc}")
-        return None
-
-    try:
-        equity = float(account.get("equity") or 0.0)
-    except Exception:
-        equity = 0.0
-    try:
-        daytrade_count = int(account.get("daytrade_count") or 0)
-    except Exception:
-        daytrade_count = 0
-    raw_pdt = account.get("pattern_day_trader")
-    is_pdt_flagged = str(raw_pdt).strip().lower() in {"true", "1", "yes"} if raw_pdt is not None else False
-
-    if equity >= 25000.0 and not is_pdt_flagged:
-        return None
-
-    if event == "open":
-        if is_pdt_flagged or daytrade_count >= 3:
-            if high_conviction_override and conviction_level == "HIGH":
-                return "PDT_OVERRIDE"  # sentinel for caller to handle
-            return (
-                f"PDT protection: live account equity ${equity:.2f} with "
-                f"daytrade_count={daytrade_count} blocks opening new positions"
-            )
-        return None
-
-    if event == "close":
-        # Always allow closes — PDT only restricts new openings. You can always
-        # sell what you own regardless of day trade count.
-        return None
-    return None
-
-
-def _compute_pdt_downgrade(original_trading_type: str, config) -> Optional[str]:
-    """
-    Compute the downgraded trading type when a PDT-blocked order is queued.
-
-    Rule: SWING → POSITION (extends holding period from 12h to 36h,
-    avoiding same-day exits that would consume another day trade).
-    SCALP and VOLATILE_EVENT remain unchanged (too short anyway).
-    POSITION remains POSITION (already the longest holding period).
-    """
-    downgrade_enabled = bool(getattr(config, "alpaca_pdt_downgrade_swing_to_position", True))
-    if not downgrade_enabled:
-        return None
-
-    original = str(original_trading_type or "").upper()
-    if original == "SWING":
-        return "POSITION"
-    return None
-
-
-def _queue_pdt_blocked_order(db, paper_trade, symbol: str, side: str, notional: float,
-                              qty: float, order_type: str, time_in_force: str,
-                              limit_price: float, extended_hours: bool,
-                              conviction_level: str, trading_type: str,
-                              downgraded_type: Optional[str], block_reason: str) -> None:
-    """
-    Queue a PDT-blocked order for replay at the next market open.
-
-    The order is stored in the pdt_pending_orders table with:
-    - Original conviction and trading type preserved
-    - Trading type downgraded (SWING → POSITION) to avoid same-day exits
-    - Status set to 'queued' for the scheduler to pick up
-    """
-    from database.models import PdtpendingOrder, AppConfig
-
-    # Enforce queue size limit — drop oldest if at capacity
-    config = db.query(AppConfig).first()
-    max_queue = int(getattr(config, "alpaca_pdt_max_queue_size", 10)) if config else 10
-    current_count = db.query(PdtpendingOrder).filter(
-        PdtpendingOrder.status == "queued"
-    ).count()
-
-    if current_count >= max_queue:
-        # Drop the oldest queued order
-        oldest = db.query(PdtpendingOrder).filter(
-            PdtpendingOrder.status == "queued"
-        ).order_by(PdtpendingOrder.queued_at.asc()).first()
-        if oldest:
-            oldest.status = "expired"
-            oldest.error_message = f"dropped: queue full ({max_queue})"
-            print(f"[alpaca/pdt] expired oldest queued order for {oldest.symbol} (queue full at {max_queue})")
-
-    try:
-        queue_entry = PdtpendingOrder(
-            paper_trade_id=getattr(paper_trade, "id", None),
-            symbol=symbol,
-            side=side,
-            notional=notional,
-            qty=qty,
-            order_type=order_type,
-            time_in_force=time_in_force,
-            limit_price=limit_price,
-            extended_hours=extended_hours,
-            original_conviction=conviction_level,
-            original_trading_type=trading_type,
-            downgraded_to_trading_type=downgraded_type,
-            downgraded_reason=f"downgraded from {trading_type} to {downgraded_type} to avoid same-day exit" if downgraded_type else None,
-            status="queued",
-            error_message=block_reason,
-        )
-        db.add(queue_entry)
-        db.commit()
-        print(f"[alpaca/pdt] queued order for {symbol} ({side}, ${notional:.2f}) — "
-              f"{trading_type}→{downgraded_type} if downgraded, replay at next market open")
-    except Exception as exc:
-        db.rollback()
-        print(f"[alpaca/pdt] error queuing order for {symbol}: {exc}")
-
-
-def _get_pdt_status(db) -> dict:
-    """
-    Return current PDT status: account equity, daytrade count, queue status.
-    Used by the API endpoint to show PDT state to the user.
-    """
-    from database.models import AppConfig, PdtpendingOrder
-
-    config = db.query(AppConfig).first()
-    if not config:
-        return {"error": "no config found"}
-
-    return {
-        "pdt_queue_enabled": bool(getattr(config, "alpaca_pdt_queue_enabled", True)),
-        "pdt_downgrade_enabled": bool(getattr(config, "alpaca_pdt_downgrade_swing_to_position", True)),
-        "pdt_notify_on_limit": bool(getattr(config, "alpaca_pdt_notify_on_limit", True)),
-        "pdt_max_queue_size": int(getattr(config, "alpaca_pdt_max_queue_size", 10)),
-    }
-
-
 # ── Main hook ─────────────────────────────────────────────────────────────────
 
 def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
@@ -1245,9 +1103,8 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
             else:
                 notional = min(notional, max_pos)
 
-    # ── Build open_raw_context early so PDT check can flag it ────────────
+    # ── Build open_raw_context early ─────────────────────────────────────
     open_raw_context: Optional[Dict[str, Any]] = None
-    _pdt_override_flag = False
     if event == "open":
         same_direction_live = (
             (side == "buy" and live_side == "long") or
@@ -1260,52 +1117,6 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
     elif event == "close":
         # Closing a direct short means buying back to cover; everything else is a sell
         side = "buy" if direct_short else "sell"
-
-    if execution_mode == "live":
-        _conviction = str(getattr(paper_trade, "conviction_level", "MEDIUM") or "MEDIUM").upper()
-        _high_conv = bool(getattr(config, "alpaca_high_conviction_override_enabled", False))
-        _pdt_override = False
-        if _high_conv and _conviction == "HIGH":
-            _pdt_override = True
-        pdt_block_reason = _get_pdt_block_reason(broker, paper_trade, event, conviction_level=_conviction, high_conviction_override=_pdt_override)
-        if pdt_block_reason:
-            if pdt_block_reason == "PDT_OVERRIDE":
-                # HIGH conviction — allow entry but flag the override
-                _pdt_override_flag = True
-                if open_raw_context is not None:
-                    open_raw_context["high_conviction_pdt_override"] = True
-                print(f"[alpaca] HIGH conviction override — bypassing PDT gate for {symbol} ({event})")
-            else:
-                # ── PDT-blocked: queue for next market open ────────────────
-                # Compute downgrade (SWING → POSITION) to avoid same-day exits
-                _trading_type = str(getattr(paper_trade, "trading_type", "SWING") or "SWING").upper()
-                _downgraded_type = _compute_pdt_downgrade(_trading_type, config)
-
-                # Queue the order instead of silently dropping it
-                queue_enabled = bool(getattr(config, "alpaca_pdt_queue_enabled", True))
-                if queue_enabled and event == "open":
-                    _queue_pdt_blocked_order(
-                        db, paper_trade, symbol, side, notional, qty,
-                        str(getattr(config, "alpaca_order_type", "market")).lower(),
-                        "day", limit_price, False,
-                        _conviction, _trading_type, _downgraded_type, pdt_block_reason,
-                    )
-                else:
-                    _record_alpaca_order_skip(
-                        db, paper_id, side, symbol, notional,
-                        broker.mode, pdt_block_reason,
-                    )
-
-                # Notify user if PDT notify is enabled
-                notify_enabled = bool(getattr(config, "alpaca_pdt_notify_on_limit", True))
-                if notify_enabled:
-                    print(f"[alpaca/pdt] PDT limit hit for {symbol}: {pdt_block_reason}")
-                    if queue_enabled and event == "open":
-                        print(f"[alpaca/pdt] Order queued for next market open" +
-                              (f" (downgraded {_trading_type}→{_downgraded_type})" if _downgraded_type else ""))
-                    else:
-                        print(f"[alpaca/pdt] Order NOT queued (queue disabled or close event)")
-                return
 
     if event == "close":
         # Guard: only close if a live open order was actually placed for this trade.
@@ -1348,74 +1159,39 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
             )
             return
 
-        # ── Full position close via Alpaca's endpoint ──
-        # Uses close_position() which tells Alpaca to sell the EXACT remaining
-        # quantity including any residual dust (e.g., 0.00003 shares from
-        # partial fills). This is safer than computing a qty ourselves.
-        _try_close = True
-        _close_attempt = 0
-        while _try_close:
-            _close_attempt += 1
+        # ── Compute app-managed qty for partial close ────────────────────
+        # Only close the shares the app opened, leaving any manual baseline alone.
+        # Read pre_existing_qty from the open order's _managed_context.
+        from database.models import AlpacaOrder as _AO
+        _open_order = (
+            db.query(_AO)
+            .filter(
+                _AO.paper_trade_id == paper_id,
+                _AO.status.in_(('filled', 'accepted', 'partially_filled')),
+            )
+            .first()
+        )
+        _managed_ctx = {}
+        if _open_order:
+            _managed_ctx = (getattr(_open_order, 'raw_response') or {}).get('_managed_context', {}) or {}
+        _pre_existing = float(_managed_ctx.get('pre_existing_qty') or 0.0)
+
+        # Current live position qty
+        _live_qty = 0.0
+        if live_qty is not None:
             try:
-                response = broker.close_position(symbol)
-                _record_alpaca_order(
-                    db, paper_id, side, symbol, None, None,
-                    response, broker.mode, False, None, None,
-                )
-                _close_log = f"[alpaca] close {side} {symbol}: "
-                if _close_attempt > 1:
-                    _close_log += f"[RETRY-{_close_attempt}] "
-                _close_log += (
-                    f"order_id={response.get('id')} status={response.get('status')} "
-                    f"qty={response.get('qty')} filled_qty={response.get('filled_qty')}"
-                )
-                print(_close_log)
-                break
-            except Exception as exc:
-                if _close_attempt >= 2:
-                    _record_alpaca_order_error(
-                        db, paper_id, side, symbol, None,
-                        f"{str(exc)} (after {_close_attempt} attempts)", broker.mode,
-                    )
-                    # Decision log fallback
-                    try:
-                        from database.engine import DecisionLogSessionLocal
-                        from database.models import DecisionLogTrade
-                        from services.decision_logger import logger as _dl
-                        _ddb = DecisionLogSessionLocal()
-                        try:
-                            _trade_log = _ddb.query(DecisionLogTrade).filter(
-                                DecisionLogTrade.paper_trade_id == paper_id
-                            ).first()
-                            if _trade_log:
-                                _dl.log_trade_event(
-                                    _ddb,
-                                    trade_log_id=_trade_log.id,
-                                    event_type="execution_failed",
-                                    run_id=None,
-                                    keep_vs_close="close",
-                                    decision_reason=f"Alpaca close failed after {_close_attempt} attempts: {exc}",
-                                    event_details={
-                                        "symbol": symbol,
-                                        "side": side,
-                                        "attempts": _close_attempt,
-                                        "error": str(exc),
-                                    },
-                                )
-                                _ddb.commit()
-                        except Exception as _dlx:
-                            _ddb.rollback()
-                            print(f"[decision-log] close fallback error: {_dlx}")
-                        finally:
-                            _ddb.close()
-                    except Exception as _dlx:
-                        print(f"[decision-log] close fallback error (non-fatal): {_dlx}")
-                    print(f"[alpaca] close FAILED after {_close_attempt} attempts for {symbol}: {exc}")
-                    _try_close = False
-                else:
-                    print(f"[alpaca] close failed on attempt {_close_attempt} for {symbol}: {exc} — retrying...")
-                    _time.sleep(2)
-        return
+                _live_qty = float(live_qty)
+            except Exception:
+                _live_qty = 0.0
+
+        # App-managed qty = current live qty minus any pre-existing manual shares
+        _managed_qty = max(_live_qty - _pre_existing, 0.0)
+        if _managed_qty <= 0:
+            print(
+                f'[alpaca] skipping close for {symbol} (paper_id={paper_id}): '
+                f'no app-managed shares to close (live={_live_qty}, pre-existing={_pre_existing})'
+            )
+            return
 
     # ── Build order parameters ───────────────────────────────────────────────
     ext_hours  = _is_extended_hours_now(config)
@@ -1450,7 +1226,12 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
         limit_price = max(0.01, limit_price)
         order_type = "limit"
     else:
-        use_notional = notional
+        if event == "close" and shares > 0:
+            # For closes, use explicit qty (app-managed shares) instead of notional
+            qty = shares
+            use_notional = None
+        else:
+            use_notional = notional
         if order_type == "limit" and entry_price > 0:
             limit_price = round(
                 entry_price * (1 + slippage) if side == "buy" else entry_price * (1 - slippage),

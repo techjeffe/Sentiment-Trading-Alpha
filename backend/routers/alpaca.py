@@ -41,7 +41,6 @@ class AlpacaSettingsPayload(BaseModel):
     alpaca_limit_slippage_pct:             Optional[float] = None
     alpaca_daily_loss_limit_usd:           Optional[float] = None
     alpaca_max_consecutive_losses:         Optional[int]   = None
-    alpaca_high_conviction_override_enabled: Optional[bool] = None
 
 
 # ── Status ────────────────────────────────────────────────────────────────────
@@ -84,7 +83,6 @@ async def get_alpaca_status(
         "limit_slippage_pct":                 float(getattr(config, "alpaca_limit_slippage_pct",    0.002) or 0.002),
         "daily_loss_limit_usd":               getattr(config, "alpaca_daily_loss_limit_usd",        None),
         "max_consecutive_losses":             getattr(config, "alpaca_max_consecutive_losses",      3),
-        "high_conviction_override_enabled":   bool(getattr(config, "alpaca_high_conviction_override_enabled", False)),
         "account":                            account_info,
     }
 
@@ -312,7 +310,6 @@ async def update_alpaca_settings(
         "limit_slippage_pct":        float(getattr(config, "alpaca_limit_slippage_pct",    0.002) or 0.002),
         "daily_loss_limit_usd":      getattr(config, "alpaca_daily_loss_limit_usd",        None),
         "max_consecutive_losses":    getattr(config, "alpaca_max_consecutive_losses",      3),
-        "high_conviction_override_enabled": bool(getattr(config, "alpaca_high_conviction_override_enabled", False)),
     }
 
 

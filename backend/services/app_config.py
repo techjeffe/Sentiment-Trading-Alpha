@@ -1043,19 +1043,6 @@ def update_app_config(db: Session, payload: Dict[str, Any]) -> AppConfig:
         config.alpaca_daily_loss_limit_usd = _normalize_trading_logic_float(payload.get("alpaca_daily_loss_limit_usd"), 1.0, 1_000_000.0)
     if "alpaca_max_consecutive_losses" in payload:
         config.alpaca_max_consecutive_losses = _normalize_trading_logic_int(payload.get("alpaca_max_consecutive_losses"), 1, 50)
-    if "alpaca_high_conviction_override_enabled" in payload:
-        config.alpaca_high_conviction_override_enabled = _coerce_bool(payload.get("alpaca_high_conviction_override_enabled"), False)
-
-    # ── PDT-specific settings ────────────────────────────────────────────────
-    if "alpaca_pdt_queue_enabled" in payload:
-        config.alpaca_pdt_queue_enabled = _coerce_bool(payload.get("alpaca_pdt_queue_enabled"), True)
-    if "alpaca_pdt_downgrade_swing_to_position" in payload:
-        config.alpaca_pdt_downgrade_swing_to_position = _coerce_bool(payload.get("alpaca_pdt_downgrade_swing_to_position"), True)
-    if "alpaca_pdt_max_queue_size" in payload:
-        config.alpaca_pdt_max_queue_size = _normalize_trading_logic_int(payload.get("alpaca_pdt_max_queue_size"), 1, 50)
-    if "alpaca_pdt_notify_on_limit" in payload:
-        config.alpaca_pdt_notify_on_limit = _coerce_bool(payload.get("alpaca_pdt_notify_on_limit"), True)
-
     # ── Strategy feature toggles (null = use logic_config.json default) ──
     if "continuous_entry_enabled" in payload:
         val = payload.get("continuous_entry_enabled")
@@ -1319,11 +1306,6 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         "alpaca_limit_slippage_pct":     float(getattr(config, "alpaca_limit_slippage_pct",    0.002) or 0.002),
         "alpaca_daily_loss_limit_usd":   getattr(config, "alpaca_daily_loss_limit_usd",        None),
         "alpaca_max_consecutive_losses": getattr(config, "alpaca_max_consecutive_losses",      3),
-        "alpaca_high_conviction_override_enabled": bool(getattr(config, "alpaca_high_conviction_override_enabled", False)),
-        "alpaca_pdt_queue_enabled": bool(getattr(config, "alpaca_pdt_queue_enabled", True)),
-        "alpaca_pdt_downgrade_swing_to_position": bool(getattr(config, "alpaca_pdt_downgrade_swing_to_position", True)),
-        "alpaca_pdt_max_queue_size": int(getattr(config, "alpaca_pdt_max_queue_size", 10)),
-        "alpaca_pdt_notify_on_limit": bool(getattr(config, "alpaca_pdt_notify_on_limit", True)),
         # JSON defaults (read-only, for display)
         "logic_defaults": {
             "paper_trade_amount": _L["paper_trade_amount"],

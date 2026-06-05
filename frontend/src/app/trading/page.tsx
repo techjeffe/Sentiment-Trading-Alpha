@@ -152,7 +152,6 @@ type AlpacaPosition = {
 type AlpacaStatus = {
     execution_mode?: "off" | "paper" | "live";
     live_trading_enabled: boolean;
-    high_conviction_override_enabled: boolean;
     secrets?: {
         paper?: { configured?: boolean };
         live?: { configured?: boolean };
@@ -740,40 +739,6 @@ export default function TradingPage() {
     // unrealized_pl comes directly from Alpaca and excludes cash deposits — use it
     // instead of equity-last_equity which would incorrectly include funding movements.
     const liveUnrealizedPnl = toNumber(liveAccount?.unrealized_pl);
-    const liveDaytradeCount = toNumber(liveAccount?.daytrade_count);
-    const liveDaytradingBuyingPower = toNumber(liveAccount?.daytrading_buying_power);
-    const livePatternDayTrader = String(liveAccount?.pattern_day_trader ?? "").toLowerCase() === "true";
-    const liveTradingBlocked = String(liveAccount?.trading_blocked ?? "").toLowerCase() === "true";
-    const liveUnderPdtEquity = liveEquity != null && liveEquity < 25000;
-    const livePdtRiskLevel = liveTradingBlocked || livePatternDayTrader || (liveUnderPdtEquity && (liveDaytradeCount ?? 0) >= 3)
-        ? "blocked"
-        : liveUnderPdtEquity && (liveDaytradeCount ?? 0) >= 2
-            ? "warning"
-            : liveUnderPdtEquity
-                ? "watch"
-                : "clear";
-    const livePdtTone = livePdtRiskLevel === "blocked"
-        ? "border-red-500/35 bg-red-500/10 text-red-200"
-        : livePdtRiskLevel === "warning"
-            ? "border-amber-500/35 bg-amber-500/10 text-amber-100"
-            : livePdtRiskLevel === "watch"
-                ? "border-sky-500/30 bg-sky-500/10 text-sky-100"
-                : "border-emerald-500/25 bg-emerald-500/10 text-emerald-100";
-    const livePdtHeadline = livePdtRiskLevel === "blocked"
-        ? "PDT protection active"
-        : livePdtRiskLevel === "warning"
-            ? "PDT threshold close"
-            : livePdtRiskLevel === "watch"
-                ? "Sub-$25k account"
-                : "PDT status clear";
-    const livePdtBody = livePdtRiskLevel === "blocked"
-        ? "New opens and same-day closes can be blocked to avoid pattern day trading violations."
-        : livePdtRiskLevel === "warning"
-            ? "This account is below $25k and is near the 3 day-trade threshold in the rolling 5-day window."
-            : livePdtRiskLevel === "watch"
-                ? "This account is below $25k, so same-day round trips need to stay limited."
-                : "Equity is above the standard PDT threshold or the account is not currently at risk.";
-
     // ── Live summary: prefer server-computed data, fall back to client-side ──
     const liveSummaryData = liveSummary;
     const liveWins = liveSummaryData?.win_count ?? 0;
@@ -940,45 +905,6 @@ export default function TradingPage() {
                                     <StatCard label="Open Positions" value={String(alpacaLivePositions.length)} />
                                     <StatCard label="Total Trades" value={String(liveTotalTrades)} />
                                 </div>
-                                {(() => {
-                                    const highConvOverride = alpacaStatus?.high_conviction_override_enabled ?? false;
-                                    return (
-                                        <div className={`rounded-xl border p-4 ${livePdtTone}`}>
-                                            <div className="flex items-center justify-between gap-3 flex-wrap">
-                                                <div>
-                                                    <p className="text-sm font-semibold">{livePdtHeadline}</p>
-                                                    <p className="mt-1 text-xs text-current/80">{livePdtBody}</p>
-                                                    {highConvOverride && (
-                                                        <p className="mt-2 text-xs text-current/90 font-medium">
-                                                            ⚡ <strong>High conviction override active:</strong> HIGH conviction trades can enter positions even when PDT limits are approaching.
-                                                        </p>
-                                                    )}
-                                                </div>
-                                                <span className="rounded-full border border-current/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide">
-                                                    {livePdtRiskLevel}
-                                                </span>
-                                            </div>
-                                            <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                                                <div>
-                                                    <p className="text-current/65">Equity</p>
-                                                    <p className="mt-1 font-semibold">{liveEquity != null ? fmtMoney(liveEquity) : "—"}</p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-current/65">Day Trades</p>
-                                                    <p className="mt-1 font-semibold">{liveDaytradeCount != null ? String(liveDaytradeCount) : "—"}</p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-current/65">PDT Flag</p>
-                                                    <p className="mt-1 font-semibold">{livePatternDayTrader ? "Yes" : "No"}</p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-current/65">Daytrade BP</p>
-                                                    <p className="mt-1 font-semibold">{liveDaytradingBuyingPower != null ? fmtMoney(liveDaytradingBuyingPower) : "—"}</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                })()}
 
                                 {/* Live open positions — from Alpaca live positions endpoint */}
                                 <div className="rounded-xl border border-rose-500/20 overflow-hidden" style={{ background: "rgba(30,41,59,0.7)" }}>

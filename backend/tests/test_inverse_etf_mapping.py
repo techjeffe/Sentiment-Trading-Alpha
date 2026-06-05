@@ -209,7 +209,6 @@ class TestInverseETFMappingIntegration:
         config.alpaca_daily_loss_limit_usd = 500.0
         config.alpaca_max_consecutive_losses = 3
         config.risk_profile = "moderate"
-        config.alpaca_high_conviction_override_enabled = False
         config.stop_loss_pct = 2.0
         config.take_profit_pct = 3.0
         config.alpaca_live_trade_amount_usd = 100.0
@@ -261,7 +260,6 @@ class TestInverseETFMappingIntegration:
         config.alpaca_daily_loss_limit_usd = 500.0
         config.alpaca_max_consecutive_losses = 3
         config.risk_profile = "moderate"
-        config.alpaca_high_conviction_override_enabled = False
         config.stop_loss_pct = 2.0
         config.take_profit_pct = 3.0
 
