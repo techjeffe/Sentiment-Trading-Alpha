@@ -65,6 +65,13 @@ class MaterialityService:
         if candidate_signal and previous_signal and self._any_direction_flip(previous_signal, candidate_signal):
             return True
 
+        # ── Same-direction continuation: always allow regardless of symbol-set changes ──
+        if candidate_signal and previous_signal:
+            _prev_dir = str(previous_signal.get("signal_type") or "HOLD").upper()
+            _cur_dir = str(candidate_signal.signal_type or "HOLD").upper()
+            if _prev_dir == _cur_dir and _prev_dir != "HOLD":
+                return True
+
         if not self._signals_differ_materially(previous_signal, candidate_signal):
             return True
         if self._recommendation_structure_changed_without_thesis_flip(previous_signal, candidate_signal):
