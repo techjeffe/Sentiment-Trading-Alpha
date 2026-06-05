@@ -10,6 +10,7 @@ Position lifecycle (mirrors what a real trader following every signal would do):
 - HOLD signal → close any open position (thesis gone), stay flat
 """
 
+import types as _types
 from datetime import datetime, timedelta, time as time_cls, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Dict, Any, List, Tuple
@@ -1007,6 +1008,18 @@ def process_signals(
                             f"${_accum_amount:.2f} ({_accum_shares:.6f} shares) "
                             f"→ total ${_new_total_amount:.2f}, blended entry ${_new_entry_price:.4f}"
                         )
+                        # Queue the delta as an Alpaca open so the live account
+                        # also adds to the position when accumulation happens.
+                        _alpaca_pending.append((_types.SimpleNamespace(
+                            execution_ticker=open_pos.execution_ticker,
+                            underlying=open_pos.underlying,
+                            signal_type=open_pos.signal_type,
+                            conviction_level=conviction_level,
+                            amount=_accum_amount,
+                            shares=_accum_shares,
+                            entry_price=entry_price,
+                            id=open_pos.id,
+                        ), "open"))
 
             # Optionally reset the holding window when the thesis is re-confirmed
             if _cv.get("reset_window_on_confirmation", True):
