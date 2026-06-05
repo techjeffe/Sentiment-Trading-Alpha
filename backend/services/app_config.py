@@ -1216,7 +1216,7 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         "auto_run_interval_minutes": auto_run_interval_minutes,
         "tracked_symbols": tracked_symbols or DEFAULT_TRACKED_SYMBOLS.copy(),
         "custom_symbols": custom_symbols,
-        "default_symbols": DEFAULT_TRACKED_SYMBOLS.copy(),
+        "default_symbols": SUPPORTED_SYMBOLS.copy(),
         "max_custom_symbols": MAX_CUSTOM_SYMBOLS,
         "max_posts": max_posts,
         "include_backtest": _coerce_bool(getattr(config, "include_backtest", True), True),

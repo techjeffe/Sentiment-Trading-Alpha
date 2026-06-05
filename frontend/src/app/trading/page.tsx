@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect, useCallback } from "react";
+import { AppHeader } from "@/components/AppHeader";
 import {
     TrendingUp, TrendingDown, Minus, RefreshCw, Trash2,
     DollarSign, BarChart2, Activity,
@@ -775,8 +776,8 @@ export default function TradingPage() {
     return (
         <div className="min-h-screen" style={{ backgroundColor: "#0f172a", color: "#f8fafc" }}>
             {/* Header */}
-            <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-10">
-                <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
+            <AppHeader
+                titleSlot={
                     <div className="flex items-center gap-3 flex-wrap">
                         <div>
                             <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 to-blue-400">
@@ -804,32 +805,33 @@ export default function TradingPage() {
                             </span>
                         )}
                     </div>
-                    <div className="flex items-center gap-2">
-                        {data?.market && <MarketBadge market={data.market} />}
-                        <button
-                            type="button"
-                            onClick={load}
-                            disabled={loading}
-                            className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-50"
-                        >
-                            <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-                            Refresh
-                        </button>
-                        <Link href="/" className="text-xs text-slate-400 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5">
-                            Dashboard
-                        </Link>
-                        <button
-                            type="button"
-                            onClick={handleReset}
-                            disabled={resetting || loading}
-                            className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 border border-red-500/20 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-50"
-                        >
-                            <Trash2 size={12} />
-                            Reset
-                        </button>
-                    </div>
+                }
+            >
+                <div className="flex items-center gap-2 shrink-0">
+                    {data?.market && <MarketBadge market={data.market} />}
+                    <button
+                        type="button"
+                        onClick={load}
+                        disabled={loading}
+                        className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-50"
+                    >
+                        <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+                        Refresh
+                    </button>
+                    <Link href="/" className="text-xs text-slate-400 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5">
+                        Dashboard
+                    </Link>
+                    <button
+                        type="button"
+                        onClick={handleReset}
+                        disabled={resetting || loading}
+                        className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 border border-red-500/20 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-50"
+                    >
+                        <Trash2 size={12} />
+                        Reset
+                    </button>
                 </div>
-            </header>
+            </AppHeader>
 
             <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
                 {error && (

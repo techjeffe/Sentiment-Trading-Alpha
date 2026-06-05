@@ -50,6 +50,7 @@ import TradeExecutionModal from "@/components/Dashboard/TradeExecutionModal";
 import ActualTradeComparisonCard from "@/components/Dashboard/ActualTradeComparisonCard";
 import { useTimezone } from "@/lib/timezone";
 import { useAnalysis } from "@/lib/context/AnalysisContext";
+import { AppHeader } from "@/components/AppHeader";
 
 const RECENT_ANALYSIS_TIMES_KEY = "recentAnalysisTimes";
 const MAX_RECENT_ANALYSIS_TIMES = 12;
@@ -648,77 +649,76 @@ export default function Home() {
         <div className="min-h-screen" style={{ backgroundColor: "#0f172a", color: "#f8fafc" }}>
 
             {/* ── Header ── */}
-            <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-10">
-                <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
+            <AppHeader
+                titleSlot={
                     <button type="button" onClick={() => setActiveTab("signal")} className="text-left shrink-0">
                         <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">
                             Sentiment Trading Alpha
                         </h1>
                         <p className="text-slate-500 text-xs mt-0.5">{trackedSymbols.join(" · ")} | Geopolitical Sentiment Pipeline</p>
                     </button>
-
-                    {/* ── Primary nav tabs ── */}
-                    <nav className="flex items-center gap-1 rounded-xl p-1 shrink-0" style={{ background: "rgba(15,23,42,0.8)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                        {(["signal", "history", "compare", ...(advancedMode ? ["debug"] : [])] as ("signal" | "history" | "compare" | "debug")[]).map((tab) => {
-                            const labels: Record<string, string> = { signal: "Signal", history: "History", compare: "Compare", debug: "Debug" };
-                            const isActive = activeTab === tab;
-                            const hasDot = tab === "compare" && hasCompareResults;
-                            return (
-                                <button
-                                    key={tab}
-                                    type="button"
-                                    onClick={() => setActiveTab(tab)}
-                                    className={`flex items-center gap-1.5 rounded-lg py-1.5 px-3 text-xs font-semibold transition-colors ${isActive ? "bg-slate-700 text-white shadow-sm" : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
-                                        }`}
-                                >
-                                    {labels[tab]}
-                                    {hasDot && <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />}
-                                </button>
-                            );
-                        })}
-                        <div className="w-px h-5 bg-slate-700/60 mx-1" />
-                        <button
-                            type="button"
-                            onClick={() => setAdvancedMode((current) => !current)}
-                            className={`rounded-lg py-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${advancedMode
-                                ? "bg-blue-500/20 text-blue-300 border border-blue-400/30"
-                                : "text-slate-500 hover:text-slate-300 hover:bg-slate-800/60"
-                                }`}
-                            title={advancedMode ? "Advanced mode enabled — Debug tab visible" : "Enable advanced mode to show Debug tab"}
-                        >
-                            {advancedMode ? "Adv" : "Std"}
-                        </button>
-                    </nav>
-
-                    <div className="flex items-center gap-3 shrink-0">
-                        {error && (
-                            <span className="flex items-center gap-1.5 text-xs bg-red-500/10 text-red-400 px-2.5 py-1 rounded-full border border-red-500/20">
-                                <WifiOff size={11} /> {isOllamaError ? "Ollama" : "Error"}
-                            </span>
-                        )}
-                        <div className="text-right hidden sm:block">
-                            <p className="text-[11px] text-slate-500">Status</p>
-                            <p className={`text-xs font-semibold ${isAnalyzing ? "text-yellow-400" : result ? "text-emerald-400" : "text-slate-400"}`}>
-                                {isAnalyzing ? "Analyzing…" : result ? "Ready" : "Idle"}
-                            </p>
-                        </div>
-                        <Link href="/trading" className="text-xs text-emerald-400 hover:text-emerald-200 border border-emerald-500/20 rounded-lg px-2.5 py-1.5">
-                            Trading
-                        </Link>
-                        <Link href="/about" className="text-xs text-slate-400 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5">
-                            About
-                        </Link>
-                        <Link href="/health" className="text-xs text-emerald-400 hover:text-emerald-200 border border-emerald-500/20 rounded-lg px-2.5 py-1.5">
-                            Health
-                        </Link>
-                        <Link href="/admin" className="text-xs text-blue-400 hover:text-blue-200 border border-blue-500/20 rounded-lg px-2.5 py-1.5">
-                            Admin
-                        </Link>
+                }
+            >
+                <div className="flex items-center gap-3 shrink-0">
+                    {error && (
+                        <span className="flex items-center gap-1.5 text-xs bg-red-500/10 text-red-400 px-2.5 py-1 rounded-full border border-red-500/20">
+                            <WifiOff size={11} /> {isOllamaError ? "Ollama" : "Error"}
+                        </span>
+                    )}
+                    <div className="text-right hidden sm:block">
+                        <p className="text-[11px] text-slate-500">Status</p>
+                        <p className={`text-xs font-semibold ${isAnalyzing ? "text-yellow-400" : result ? "text-emerald-400" : "text-slate-400"}`}>
+                            {isAnalyzing ? "Analyzing…" : result ? "Ready" : "Idle"}
+                        </p>
                     </div>
+                    <Link href="/trading" className="text-xs text-emerald-400 hover:text-emerald-200 border border-emerald-500/20 rounded-lg px-2.5 py-1.5">
+                        Trading
+                    </Link>
+                    <Link href="/about" className="text-xs text-slate-400 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5">
+                        About
+                    </Link>
+                    <Link href="/health" className="text-xs text-emerald-400 hover:text-emerald-200 border border-emerald-500/20 rounded-lg px-2.5 py-1.5">
+                        Health
+                    </Link>
+                    <Link href="/admin" className="text-xs text-blue-400 hover:text-blue-200 border border-blue-500/20 rounded-lg px-2.5 py-1.5">
+                        Admin
+                    </Link>
                 </div>
-            </header>
+            </AppHeader>
 
             <main className="max-w-6xl mx-auto px-6 py-8">
+                {/* ── Tab navigation ── */}
+                <nav className="flex items-center gap-1 rounded-xl p-1 mb-6 w-fit" style={{ background: "rgba(15,23,42,0.8)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                    {(["signal", "history", "compare", ...(advancedMode ? ["debug"] : [])] as ("signal" | "history" | "compare" | "debug")[]).map((tab) => {
+                        const labels: Record<string, string> = { signal: "Signal", history: "History", compare: "Compare", debug: "Debug" };
+                        const isActive = activeTab === tab;
+                        const hasDot = tab === "compare" && hasCompareResults;
+                        return (
+                            <button
+                                key={tab}
+                                type="button"
+                                onClick={() => setActiveTab(tab)}
+                                className={`flex items-center gap-1.5 rounded-lg py-1.5 px-3 text-xs font-semibold transition-colors ${isActive ? "bg-slate-700 text-white shadow-sm" : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+                                    }`}
+                            >
+                                {labels[tab]}
+                                {hasDot && <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />}
+                            </button>
+                        );
+                    })}
+                    <div className="w-px h-5 bg-slate-700/60 mx-1" />
+                    <button
+                        type="button"
+                        onClick={() => setAdvancedMode((current) => !current)}
+                        className={`rounded-lg py-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${advancedMode
+                            ? "bg-blue-500/20 text-blue-300 border border-blue-400/30"
+                            : "text-slate-500 hover:text-slate-300 hover:bg-slate-800/60"
+                            }`}
+                        title={advancedMode ? "Advanced mode enabled — Debug tab visible" : "Enable advanced mode to show Debug tab"}
+                    >
+                        {advancedMode ? "Adv" : "Std"}
+                    </button>
+                </nav>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
                     {/* ── Left Sidebar ── */}

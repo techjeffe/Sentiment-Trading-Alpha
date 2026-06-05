@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { AppHeader } from "@/components/AppHeader";
 
 type DataPullEvent = {
   status: string;
@@ -135,27 +136,25 @@ export default function HealthPage() {
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: "#0f172a", color: "#f8fafc" }}>
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 to-cyan-300">
-              System Health
-            </h1>
-            <p className="text-slate-500 text-xs mt-0.5">Live runtime, model, and data-pull status for Sentiment Trading Alpha</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link href="/" className="text-xs text-slate-300 hover:text-white border border-slate-700 rounded-lg px-3 py-2">
-              Dashboard
-            </Link>
-            <Link href="/admin" className="text-xs text-blue-300 hover:text-blue-200 border border-blue-500/20 rounded-lg px-3 py-2">
-              Admin
-            </Link>
-            <Link href="/about" className="text-xs text-slate-300 hover:text-white border border-slate-700 rounded-lg px-3 py-2">
-              About
-            </Link>
-          </div>
+      <AppHeader
+        title="System Health"
+        titleSize="text-2xl"
+        titleGradient="from-emerald-400 to-cyan-300"
+        subtitle="Live runtime, model, and data-pull status for Sentiment Trading Alpha"
+        py="py-4"
+      >
+        <div className="flex items-center gap-3">
+          <Link href="/" className="text-xs text-slate-300 hover:text-white border border-slate-700 rounded-lg px-3 py-2">
+            Dashboard
+          </Link>
+          <Link href="/admin" className="text-xs text-blue-300 hover:text-blue-200 border border-blue-500/20 rounded-lg px-3 py-2">
+            Admin
+          </Link>
+          <Link href="/about" className="text-xs text-slate-300 hover:text-white border border-slate-700 rounded-lg px-3 py-2">
+            About
+          </Link>
         </div>
-      </header>
+      </AppHeader>
 
       <main className="max-w-6xl mx-auto px-6 py-10 space-y-6">
         <GlassCard>
