@@ -241,6 +241,10 @@ When Alpaca keys are configured and live trading is enabled, every paper trade o
 - Total open exposure cap in USD
 - Daily realized loss limit
 - Consecutive-loss circuit breaker (auto-disables live trading when hit)
+- Dynamic notional capping — orders are sized to fit within available buying power (95% buffer)
+- Automatic wash trade resolution — conflicting orders are cancelled and the order retried
+- Available shares check — close orders never sell more than Alpaca allows
+- Circuit breaker recovery UI — amber banner with one-click re-enable when the breaker fires
 - All order attempts written to an audit log regardless of outcome
 
 ---

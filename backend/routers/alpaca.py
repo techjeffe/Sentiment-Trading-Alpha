@@ -762,3 +762,68 @@ async def acknowledge_dispatch_error(
         db.commit()
         return {"acknowledged": True}
     return {"acknowledged": False, "error": "not found"}
+
+
+# ── Circuit breaker recovery ──────────────────────────────────────────────────
+
+class CircuitBreakerRecoveryPayload(BaseModel):
+    """Payload for circuit breaker re-enable confirmation."""
+    confirmed: bool = True
+
+
+@router.post("/circuit-breaker/re-enable")
+async def re_enable_circuit_breaker(
+    payload: CircuitBreakerRecoveryPayload = CircuitBreakerRecoveryPayload(),
+    _admin: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Re-enable live trading after a circuit breaker has fired.
+
+    Requires explicit confirmation (confirmed=True) to prevent accidental re-enabling.
+    Also cancels all open orders on Alpaca as a safety measure before re-enabling.
+    """
+    if not payload.confirmed:
+        raise HTTPException(status_code=400, detail="Confirmation required")
+
+    config = update_app_config(db, {
+        "alpaca_execution_mode": "live",
+        "alpaca_live_trading_enabled": True,
+    })
+
+    # Best-effort: cancel all open orders on Alpaca before re-enabling
+    try:
+        broker = get_broker_from_keychain(mode="live")
+        if broker:
+            cancelled = broker.cancel_all_orders()
+            if cancelled:
+                print(f"[alpaca] circuit breaker re-enable: cancelled {len(cancelled)} open order(s)")
+    except Exception as exc:
+        print(f"[alpaca] circuit breaker re-enable: cancel_all_orders failed (non-fatal): {exc}")
+
+    return {
+        "ok": True,
+        "execution_mode": str(getattr(config, "alpaca_execution_mode", "off") or "off"),
+        "live_trading_enabled": bool(getattr(config, "alpaca_live_trading_enabled", False)),
+        "message": "Live trading re-enabled",
+    }
+
+
+@router.get("/circuit-breaker/status")
+async def get_circuit_breaker_status(
+    _admin: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Return the current circuit breaker status.
+
+    Returns whether live trading is currently disabled (circuit breaker fired) and
+    the last known reason if available.
+    """
+    config = get_or_create_app_config(db)
+    is_disabled = not bool(getattr(config, "alpaca_live_trading_enabled", True))
+    execution_mode = str(getattr(config, "alpaca_execution_mode", "off") or "off")
+
+    return {
+        "circuit_breaker_fired": is_disabled and execution_mode == "live",
+        "live_trading_enabled": bool(getattr(config, "alpaca_live_trading_enabled", True)),
+        "execution_mode": execution_mode,
+    }

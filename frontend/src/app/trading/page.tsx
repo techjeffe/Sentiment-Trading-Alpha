@@ -445,6 +445,10 @@ export default function TradingPage() {
     const [livePrices, setLivePrices] = useState<Record<string, any>>({});
     const [liveSummary, setLiveSummary] = useState<any>(null);
 
+    // ── Circuit breaker state (Option C #4) ─────────────────────────────
+    const [circuitBreakerFired, setCircuitBreakerFired] = useState(false);
+    const [reEnabling, setReEnabling] = useState(false);
+
     // Closed trades pagination (older trades beyond the initial 4-day window)
     const [olderTrades, setOlderTrades] = useState<ClosedTrade[]>([]);
     const [olderTradesOffset, setOlderTradesOffset] = useState(0);
@@ -530,7 +534,7 @@ export default function TradingPage() {
 
     const loadAlpaca = useCallback(async () => {
         try {
-            const [statusRes, ordersRes, paperAccountRes, liveAccountRes, paperHistoryRes, liveHistoryRes, livePositionsRes, liveSummaryRes] = await Promise.all([
+            const [statusRes, ordersRes, paperAccountRes, liveAccountRes, paperHistoryRes, liveHistoryRes, livePositionsRes, liveSummaryRes, cbStatusRes] = await Promise.all([
                 fetch("/api/alpaca/status", { cache: "no-store" }),
                 fetch("/api/alpaca/orders?limit=50", { cache: "no-store" }),
                 fetch("/api/alpaca/account?mode=paper", { cache: "no-store" }),
@@ -539,6 +543,7 @@ export default function TradingPage() {
                 fetch("/api/alpaca/portfolio-history?mode=live&period=1M&timeframe=1D", { cache: "no-store" }),
                 fetch("/api/alpaca/positions?mode=live", { cache: "no-store" }),
                 fetch("/api/alpaca/live-summary", { cache: "no-store" }),
+                fetch("/api/alpaca/circuit-breaker/status", { cache: "no-store" }),
             ]);
             if (statusRes.ok) {
                 const s = await statusRes.json();
@@ -570,6 +575,11 @@ export default function TradingPage() {
 
             if (liveSummaryRes.ok) {
                 setLiveSummary(await liveSummaryRes.json());
+            }
+            // ── Circuit breaker status (Option C #4) ─────────────────────
+            if (cbStatusRes.ok) {
+                const cbStatus = await cbStatusRes.json();
+                setCircuitBreakerFired(!!cbStatus?.circuit_breaker_fired);
             }
         } catch { /* silent — Alpaca may not be configured */ }
     }, []);
@@ -627,6 +637,27 @@ export default function TradingPage() {
             await loadAlpaca(); // Reload Alpaca data immediately to reflect the change
         } catch (err: any) {
             alert(err.message);
+        }
+    };
+
+    // ── Circuit breaker re-enable (Option C #4) ─────────────────────────
+    const handleReEnableCircuitBreaker = async () => {
+        if (!confirm(
+            "Re-enable live trading? This will cancel all open Alpaca orders and re-enable execution.\n\nContinue?"
+        )) return;
+        setReEnabling(true);
+        try {
+            const res = await fetch("/api/alpaca/circuit-breaker/re-enable", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ confirmed: true }),
+            });
+            if (!res.ok) throw new Error("Failed to re-enable trading");
+            await loadAlpaca(); // Reload to reflect the change
+        } catch (err: any) {
+            alert(err.message);
+        } finally {
+            setReEnabling(false);
         }
     };
 
@@ -770,6 +801,28 @@ export default function TradingPage() {
         <div className="min-h-screen" style={{ backgroundColor: "#0f172a", color: "#f8fafc" }}>
             {/* Dispatch error banner — shows when live close-before-open fails */}
             <DispatchErrorBanner />
+            {/* ── Circuit breaker indicator (Option C #4) ──────────────────── */}
+            {circuitBreakerFired && (
+                <div className="mx-6 mt-4 rounded-xl border border-amber-500/30 bg-amber-950/20 px-5 py-4 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                        <span className="text-amber-400 text-lg">⚡</span>
+                        <div>
+                            <p className="text-sm font-semibold text-amber-300">Circuit Breaker Active</p>
+                            <p className="text-[11px] text-amber-400/80 mt-0.5">
+                                Live trading was auto-disabled by a safety limit. No new orders will be placed until re-enabled.
+                            </p>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={handleReEnableCircuitBreaker}
+                        disabled={reEnabling}
+                        className="flex-shrink-0 rounded-lg border border-amber-600/40 bg-amber-600/15 px-4 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-600/25 transition-colors disabled:opacity-50"
+                    >
+                        {reEnabling ? "Re-enabling…" : "Re-enable Live Trading"}
+                    </button>
+                </div>
+            )}
             {/* Header */}
             <AppHeader
                 titleSlot={

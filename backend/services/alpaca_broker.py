@@ -55,6 +55,104 @@ class CircuitBreakerError(Exception):
     """Raised when a safety limit would be breached; live trading is auto-disabled."""
 
 
+class WashTradeError(Exception):
+    """Raised when Alpaca detects a potential wash trade; contains the conflicting order ID."""
+    def __init__(self, message: str, existing_order_id: Optional[str] = None):
+        super().__init__(message)
+        self.existing_order_id = existing_order_id
+
+
+def _get_buying_power(broker: "AlpacaBroker") -> Optional[float]:
+    """Return the account's buying power. Returns None on error."""
+    try:
+        account = broker.get_account()
+        bp = account.get("buying_power")
+        if bp is not None:
+            return float(bp)
+        return None
+    except Exception as exc:
+        print(f"[alpaca] buying power fetch failed: {exc}")
+        return None
+
+
+def _detect_wash_trade_error(exc: Exception) -> Optional[str]:
+    """Check if an Alpaca error indicates a potential wash trade.
+
+    Returns the existing_order_id from the error response if detected, else None.
+    Alpaca returns 403 with a message like:
+      "Potential wash trade detected for {symbol}. Existing order id: {id}"
+    """
+    detail = str(exc)
+    if "wash trade" not in detail.lower() and "403" not in detail:
+        return None
+    # Try to extract existing_order_id from the error detail
+    import re
+    match = re.search(r"existing.order.id[:\s]+([a-f0-9-]+)", detail, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    # Also check the raw HTTP response if available
+    if hasattr(exc, "response"):
+        try:
+            body = exc.response.text if hasattr(exc, "response") else ""
+            match = re.search(r"existing.order.id[:\s]+([a-f0-9-]+)", body, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+    return None
+
+
+def _resolve_wash_trade(broker: "AlpacaBroker", existing_order_id: str, symbol: str) -> bool:
+    """Cancel the conflicting Alpaca order and wait for confirmation.
+
+    Returns True if the conflicting order was successfully cancelled.
+    """
+    try:
+        print(f"[alpaca] wash trade: cancelling conflicting order {existing_order_id} for {symbol}")
+        broker.cancel_order(existing_order_id)
+        # Brief wait for Alpaca to process the cancellation
+        _time.sleep(1.5)
+        # Verify the order is no longer open
+        try:
+            order = broker.get_order(existing_order_id)
+            status = str(order.get("status", "")).lower()
+            if status in {"filled", "cancelled", "expired", "rejected", "error"}:
+                print(f"[alpaca] wash trade: conflicting order {existing_order_id} confirmed cancelled (status={status})")
+                return True
+            else:
+                print(f"[alpaca] wash trade: conflicting order {existing_order_id} still {status}, will retry")
+                return False
+        except Exception:
+            # Order not found — likely already cancelled
+            print(f"[alpaca] wash trade: order {existing_order_id} no longer exists, treating as cancelled")
+            return True
+    except Exception as cancel_exc:
+        print(f"[alpaca] wash trade: cancel of {existing_order_id} failed: {cancel_exc}")
+        return False
+
+
+def _get_available_shares_for_close(broker: "AlpacaBroker", symbol: str) -> Optional[float]:
+    """Return available shares for a close (sell) order from the live position.
+
+    Returns None if the position is unavailable or has no available shares.
+    """
+    try:
+        pos = broker.get_position(symbol)
+        if not isinstance(pos, dict):
+            return None
+        available = pos.get("available_shares")
+        if available is not None:
+            return float(available)
+        # Fallback: use qty
+        qty = pos.get("qty")
+        if qty is not None:
+            return float(qty)
+        return None
+    except Exception as exc:
+        print(f"[alpaca] available shares fetch failed for {symbol}: {exc}")
+        return None
+
+
 # ── Broker client ─────────────────────────────────────────────────────────────
 
 class AlpacaBroker:
@@ -1452,6 +1550,20 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
         else:
             side = "buy"    # long, or buying the inverse ETF for a short signal
 
+        # ── Dynamic notional capping (Option C #1) ───────────────────────
+        # Cap notional to min(configured_notional, buying_power * 0.95)
+        # so orders always fit within available buying power with a 5% buffer.
+        if broker.mode == "live" and notional > 0:
+            buying_power = _get_buying_power(broker)
+            if buying_power is not None and buying_power > 0:
+                safe_notional = buying_power * 0.95
+                if notional > safe_notional:
+                    print(
+                        f"[alpaca] notional capping: ${notional:.2f} → ${safe_notional:.2f} "
+                        f"(buying_power=${buying_power:.2f}, 95% buffer)"
+                    )
+                    notional = safe_notional
+
         try:
             _check_circuit_breakers(db, config, pending_notional=notional)
         except CircuitBreakerError as exc:
@@ -1575,6 +1687,31 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
             )
             return
 
+        # ── Available qty check (Option C #3) ────────────────────────────
+        # For close orders, use min(paper_shares, available_shares_from_alpaca)
+        # and skip if available_shares <= 0 (position held by other orders).
+        if broker.mode == "live":
+            available_shares = _get_available_shares_for_close(broker, symbol)
+            if available_shares is not None:
+                if available_shares <= 0:
+                    print(
+                        f"[alpaca] skipping close for {symbol} (paper_id={paper_id}): "
+                        f"available_shares={available_shares} (position held by other orders)"
+                    )
+                    _record_alpaca_order_skip(
+                        db, paper_id, "sell" if not direct_short else "buy", symbol,
+                        None, broker.mode,
+                        f"available_shares={available_shares} (position held by other orders)",
+                    )
+                    return
+                # Cap shares to available (never sell more than Alpaca allows)
+                if shares > available_shares:
+                    print(
+                        f"[alpaca] close qty capping: {shares} → {available_shares} "
+                        f"(available_shares={available_shares})"
+                    )
+                    shares = available_shares
+
     # ── Build order parameters ───────────────────────────────────────────────
     ext_hours  = _is_extended_hours_now(config)
 
@@ -1627,6 +1764,7 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
     _try_exec_order = True
     _attempt = 0
     _last_error = None
+    _wash_trade_resolved = False  # Track if we already resolved a wash trade
     while _try_exec_order:
         _attempt += 1
         try:
@@ -1648,6 +1786,8 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
             _log_msg = f"[alpaca] {event} {side} {symbol}: "
             if _attempt > 1:
                 _log_msg += f"[RETRY-{_attempt}] "
+            if _wash_trade_resolved:
+                _log_msg += "[WASH-TRADE-RESOLVED] "
             _log_msg += (
                 f"order_id={response.get('id')} status={response.get('status')} "
                 f"qty={response.get('qty')} filled_qty={response.get('filled_qty')} "
@@ -1657,11 +1797,27 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
             break
         except Exception as exc:
             _last_error = exc
-            if _attempt >= 2:
+            # ── Option C #2: Wash trade resolution (3rd retry path) ───────
+            if _attempt == 2 and not _wash_trade_resolved:
+                existing_order_id = _detect_wash_trade_error(exc)
+                if existing_order_id:
+                    print(
+                        f"[alpaca] wash trade detected for {symbol} "
+                        f"(conflicting order: {existing_order_id}) — resolving..."
+                    )
+                    if _resolve_wash_trade(broker, existing_order_id, symbol):
+                        _wash_trade_resolved = True
+                        print(f"[alpaca] wash trade resolved, retrying order for {symbol}...")
+                        continue
+                    else:
+                        print(f"[alpaca] wash trade resolution failed, falling through to error")
+            if _attempt >= 3:
                 # Exhausted retries — log to decision log
                 _record_alpaca_order_error(
                     db, paper_id, side, symbol, use_notional or notional,
-                    f"{str(exc)} (after {_attempt} attempts)", broker.mode, client_order_id,
+                    f"{str(exc)} (after {_attempt} attempts)" +
+                    (" [wash-trade-resolved]" if _wash_trade_resolved else ""),
+                    broker.mode, client_order_id,
                 )
                 # Decision log fallback
                 try:
@@ -1680,13 +1836,15 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
                                 event_type="execution_failed",
                                 run_id=None,
                                 keep_vs_close="open",
-                                decision_reason=f"Alpaca order failed after {_attempt} attempts: {exc}",
+                                decision_reason=f"Alpaca order failed after {_attempt} attempts: {exc}" +
+                                    (" (wash trade resolved)" if _wash_trade_resolved else ""),
                                 event_details={
                                     "symbol": symbol,
                                     "side": side,
                                     "notional": use_notional or notional,
                                     "attempts": _attempt,
                                     "error": str(exc),
+                                    "wash_trade_resolved": _wash_trade_resolved,
                                 },
                             )
                             _ddb.commit()

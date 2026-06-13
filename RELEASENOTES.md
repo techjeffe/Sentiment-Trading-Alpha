@@ -1,3 +1,47 @@
+# Release Notes — June 13, 2026
+
+## Smart Order Sizing + Wash Trade Resolution + Circuit Breaker Recovery UI
+
+Comprehensive improvements to the Alpaca execution path that prevent 403 errors at the source, automatically resolve wash trades, and give users a clear recovery path when the circuit breaker fires.
+
+**Dynamic notional capping (alpaca_broker.py):**
+
+- Before placing any live order, the system now fetches the account's buying power and caps the order notional to `min(configured_notional, buying_power * 0.95)` — a 5% buffer ensures orders always fit within available buying power
+- Prevents the most common 403 errors caused by insufficient buying power
+- Logs the capping action for observability (e.g., `[alpaca] notional capping: $5000.00 → $4750.00 (buying_power=$5000.00, 95% buffer)`)
+- The capped notional is also passed to the circuit breaker check so `pending_notional` reflects the actual order size
+
+**Automatic wash trade resolution (alpaca_broker.py):**
+
+- Added `_detect_wash_trade_error()` — parses Alpaca 403 errors for "potential wash trade detected" and extracts the conflicting `existing_order_id` from the error response
+- Added `_resolve_wash_trade()` — cancels the conflicting Alpaca order, waits 1.5 seconds for processing, then verifies the order is no longer open
+- Extended the order retry loop: attempt 3 is now a wash trade resolution path (previously attempt 2 was the last retry)
+- When a wash trade is detected and resolved, the order is retried automatically — no manual intervention needed
+- Wash trade resolution is tracked in logs (`[WASH-TRADE-RESOLVED]`) and decision log entries for auditability
+- Only one wash trade resolution per order attempt prevents infinite loops
+
+**Available shares check for close orders (alpaca_broker.py):**
+
+- Before placing a close (sell) order in live mode, the system now fetches `available_shares` from the Alpaca position
+- If `available_shares <= 0` (position held by other orders), the close is skipped and recorded as `status="skipped"` with a clear reason
+- If `available_shares` is less than the paper trade's `shares`, the quantity is capped to `min(paper_shares, available_shares)` to never sell more than Alpaca allows
+- Prevents 403 errors from partial fills, manual trades, or other orders consuming the position
+
+**Circuit breaker recovery UI (page.tsx, alpaca.py router):**
+
+- New `GET /api/alpaca/circuit-breaker/status` endpoint returns whether the circuit breaker has fired (`circuit_breaker_fired: true`)
+- New `POST /api/alpaca/circuit-breaker/re-enable` endpoint re-enables live trading with explicit confirmation
+- Trading page now shows an amber banner with ⚡ icon when the circuit breaker is active
+- Banner includes a one-click "Re-enable Live Trading" button that:
+  - Shows a confirmation dialog explaining the action
+  - Calls the re-enable API (which also cancels all open Alpaca orders as a safety measure)
+  - Reloads data to reflect the change
+- The circuit breaker status is fetched alongside all other Alpaca data on every page refresh
+
+**Files changed:** `backend/services/alpaca_broker.py`, `backend/routers/alpaca.py`, `frontend/src/app/trading/page.tsx`
+
+---
+
 # Release Notes — June 4, 2026
 
 ## Live Trading Fixes: Extended-Hours Order Guard, Direction Flip, and PDT Config Relaxation
