@@ -40,8 +40,8 @@
     "enabled": true,
     "max_multiplier": 5.0
   },
-  "reentry_cooldown_minutes": 30,
-  "min_same_day_exit_edge_pct": 0.0,
+  "reentry_cooldown_minutes": 120,
+  "min_same_day_exit_edge_pct": 1.0,
   "stop_loss_pct": 2.0,
   "take_profit_pct": 3.0,
   "leverage": {
@@ -166,7 +166,8 @@
     "half_life_hours": {
       "SPY": 2,
       "QQQ": 2,
-      "USO": 4,
+      "USO": 6,
+      "SQQQ": 6,
       "IBIT": 6,
       "BITO": 6
     },
@@ -175,7 +176,8 @@
     "symbol_hold_half_lives": {
       "SPY": 4,
       "QQQ": 4,
-      "USO": 8,
+      "USO": 12,
+      "SQQQ": 12,
       "IBIT": 12,
       "BITO": 12
     },

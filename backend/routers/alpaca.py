@@ -162,10 +162,18 @@ async def get_alpaca_positions(
         raise HTTPException(status_code=400, detail=f"Alpaca API keys not configured{slot}")
     try:
         positions = broker.get_positions()
+        result = []
         for position in positions:
             if isinstance(position, dict):
                 position["trading_mode"] = broker.mode
-        return positions
+            qty = position.get("qty") if isinstance(position, dict) else getattr(position, "qty", None)
+            try:
+                if abs(float(qty or 0)) < 0.00005:
+                    continue
+            except (TypeError, ValueError):
+                pass
+            result.append(position)
+        return result
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 

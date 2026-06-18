@@ -21,7 +21,7 @@ export default function DispatchErrorBanner() {
 
     const fetchErrors = useCallback(async () => {
         try {
-            const response = await fetch("/api/alpaca/dispatch-errors", { cache: "no-store" });
+            const response = await fetch("/api/alpaca/orphans", { cache: "no-store" });
             if (!response.ok) return;
             const data = await response.json() as DispatchError[];
             setErrors(data);
@@ -41,7 +41,7 @@ export default function DispatchErrorBanner() {
     const acknowledge = useCallback(async (errorId: number) => {
         setIsAcknowledging(errorId);
         try {
-            const response = await fetch(`/api/alpaca/dispatch-errors/${errorId}/acknowledge`, {
+            const response = await fetch(`/api/alpaca/orphans/${errorId}/acknowledge`, {
                 method: "POST",
             });
             if (response.ok) {
@@ -57,7 +57,7 @@ export default function DispatchErrorBanner() {
         try {
             await Promise.all(
                 errors.map(e =>
-                    fetch(`/api/alpaca/dispatch-errors/${e.id}/acknowledge`, { method: "POST" })
+                    fetch(`/api/alpaca/orphans/${e.id}/acknowledge`, { method: "POST" })
                 )
             );
             setErrors([]);

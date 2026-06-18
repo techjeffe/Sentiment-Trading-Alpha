@@ -280,6 +280,33 @@ async def lifespan(app: FastAPI):
     get_price_cache_service()
     print("Price cache service initialized")
 
+    # ── Snapshot renderer health check ───────────────────────────────────
+    # Telegram snapshots render an HTML dashboard to PNG via Playwright's
+    # Chromium browser. The browser binary is downloaded separately from the
+    # pip package; without it, snapshot delivery silently fails while text
+    # commands (/status) keep working. Surface the gap loudly at startup.
+    try:
+        from services.remote_snapshot import check_snapshot_renderer
+        from services.runtime_health import record_data_pull
+        renderer = check_snapshot_renderer()
+        if renderer.get("available"):
+            print("Snapshot renderer (Playwright Chromium) available")
+        else:
+            print(
+                f"WARNING: Snapshot renderer unavailable — {renderer.get('detail')}. "
+                f"Telegram image snapshots will not send. Fix: {renderer.get('remedy')}"
+            )
+            record_data_pull(
+                status="error",
+                source="remote_snapshot",
+                summary="Snapshot renderer unavailable — Telegram image snapshots disabled",
+                details=renderer,
+                error=renderer.get("detail"),
+            )
+    except Exception as exc:
+        print(f"Warning: snapshot renderer health check failed: {exc}")
+    # ─────────────────────────────────────────────────────────────────────
+
     # ── Clear stale analysis locks from previous runs ────────────────────
     try:
         db = SessionLocal()

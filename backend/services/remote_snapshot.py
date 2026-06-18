@@ -8,7 +8,7 @@ import os
 import threading
 from datetime import datetime, timedelta, timezone
 from html import escape
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import requests
@@ -568,6 +568,37 @@ def _build_snapshot_html(payload: Dict[str, Any]) -> str:
 </body>
 </html>
 """
+
+
+def check_snapshot_renderer() -> Dict[str, Any]:
+    """Verify the Playwright Chromium browser needed for PNG snapshots is installed.
+
+    Returns a dict with ``available`` (bool) and a human-readable ``detail``.
+    The Python ``playwright`` package being importable is NOT sufficient — the
+    browser binary is downloaded separately via ``playwright install chromium``.
+    Snapshot delivery silently fails without it, while text-only Telegram
+    commands (e.g. /status) keep working, which makes the gap easy to miss.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        return {
+            "available": False,
+            "detail": f"playwright package not importable: {exc}",
+            "remedy": "pip install -r requirements.txt",
+        }
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            browser.close()
+        return {"available": True, "detail": "Chromium renderer available"}
+    except Exception as exc:
+        return {
+            "available": False,
+            "detail": f"Chromium browser not launchable: {str(exc).splitlines()[0]}",
+            "remedy": "python -m playwright install chromium",
+        }
 
 
 def render_remote_snapshot_png(payload: Dict[str, Any]) -> bytes:

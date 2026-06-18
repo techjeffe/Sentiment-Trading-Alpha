@@ -570,7 +570,11 @@ export default function TradingPage() {
             setAlpacaHistories(nextHistories);
 
             if (livePositionsRes.ok) {
-                setAlpacaLivePositions(await livePositionsRes.json());
+                const positions: AlpacaPosition[] = await livePositionsRes.json();
+                setAlpacaLivePositions(positions.filter(p => {
+                    const q = typeof p.qty === "number" ? p.qty : Number(p.qty ?? NaN);
+                    return Number.isFinite(q) && Math.abs(q) >= 0.00005;
+                }));
             }
 
             if (liveSummaryRes.ok) {

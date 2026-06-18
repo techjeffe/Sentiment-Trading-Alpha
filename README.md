@@ -17,6 +17,7 @@ ollama serve
 
 # Terminal 2 — Start the backend & front-end
 pip install -r requirements.txt
+python -m playwright install chromium   # browser for Telegram image snapshots
 cd frontend
 npm install
 cd ..
@@ -147,7 +148,10 @@ Create and activate a Python 3.12 virtual environment, then:
 
 ```bash
 pip install -r requirements.txt
+python -m playwright install chromium
 ```
+
+> **Note:** `python -m playwright install chromium` downloads the headless browser used to render Telegram image snapshots. The `playwright` pip package alone does **not** include the browser binary, and it must be re-run after a Playwright version bump. Without it, text Telegram commands (e.g. `/status`) still work but image snapshots silently fail. The backend logs a `WARNING: Snapshot renderer unavailable` line at startup if the browser is missing.
 
 **Windows:**
 

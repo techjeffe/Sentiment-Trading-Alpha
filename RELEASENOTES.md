@@ -1,3 +1,20 @@
+# Release Notes — June 18, 2026
+
+## Fix: Telegram Image Snapshots Not Sending
+
+Telegram image snapshots silently failed to deliver while text commands (e.g. `/status`) continued to work. Root cause: the Playwright **Chromium browser binary was not installed**. The `playwright` pip package imports fine, but the browser used to render the HTML dashboard to PNG is downloaded separately and was missing — so `render_remote_snapshot_png()` raised, and the error was only recorded in `record_data_pull` (no visible failure).
+
+**Changes:**
+
+- **Browser installed** — ran `python -m playwright install chromium` to download the headless browser.
+- **Startup health check (`main.py`, `remote_snapshot.py`)** — new `check_snapshot_renderer()` launches Chromium at boot. If unavailable, the backend logs `WARNING: Snapshot renderer unavailable — …` with the remedy and records an error event in runtime health, instead of failing silently at send time.
+- **Setup docs (`README.md`)** — both setup sections now include `python -m playwright install chromium` with a note that it must be re-run after a Playwright version bump.
+- **Latent bug fix (`remote_snapshot.py`)** — added the missing `Optional` import (previously only masked by `from __future__ import annotations`).
+
+**Config Changes:** none.
+
+---
+
 # Release Notes — June 13, 2026
 
 ## Smart Order Sizing + Wash Trade Resolution + Circuit Breaker Recovery UI
