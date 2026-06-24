@@ -1097,7 +1097,12 @@ def process_signals(
                     continue
 
         # ── Stop-loss / Take-profit check on existing position ──
-        if open_pos is not None and existing_pos_price > 0 and signal_type == open_pos.signal_type:
+        # These checks are INDEPENDENT of signal direction — a losing position
+        # should be cut (or winner taken) regardless of what the sentiment model
+        # currently says.  Previously the guard `signal_type == open_pos.signal_type`
+        # meant that when sentiment flipped (e.g. LONG→SHORT) the stop-loss was
+        # never re-checked, allowing losses to compound.
+        if open_pos is not None and existing_pos_price > 0:
             _stop_loss = _stop_loss_pct_for_config(_app_config)
             _take_profit = _take_profit_pct_for_config(_app_config)
             if _stop_loss > 0 or _take_profit > 0:

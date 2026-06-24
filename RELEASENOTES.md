@@ -1,3 +1,22 @@
+# Release Notes — June 24, 2026
+
+## Fix: Stop-Loss / Take-Profit Now Checked Regardless of Signal Direction
+
+Stop-loss and take-profit exits were only evaluated when the current sentiment signal direction matched the position's signal direction (`signal_type == open_pos.signal_type`). When sentiment flipped (e.g. LONG→SHORT), the stop-loss was never re-checked, allowing losses to compound well past the configured threshold.
+
+**Impact:** Positions like MSFT (-6%), NET (-9.7%), NOW (-21%) and NVDA (-5.4%) were held far beyond the 2% stop-loss because the sentiment model had flipped direction on those tickers.
+
+**Fix (`paper_trading.py`):**
+
+- Removed the `signal_type == open_pos.signal_type` guard from the stop-loss / take-profit check block
+- Stop-loss and take-profit are now evaluated on **every** analysis run for every open position, regardless of what the sentiment model currently says
+- If sentiment flips while a position is losing money, the stop-loss will still trigger on the next run
+- Added explanatory comment documenting why the check is direction-independent
+
+**Config Changes:** none (uses existing `stop_loss_pct: 2.0` and `take_profit_pct: 3.0` from `logic_config.json`).
+
+---
+
 # Release Notes — June 18, 2026
 
 ## Fix: Telegram Image Snapshots Not Sending
