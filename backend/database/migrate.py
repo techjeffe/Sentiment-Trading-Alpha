@@ -139,6 +139,8 @@ def migrate():
             ("alpaca_max_total_exposure_usd", "REAL"),
             ("alpaca_daily_loss_limit_usd",   "REAL"),
             ("alpaca_max_consecutive_losses", "INTEGER"),
+            ("circuit_breaker_fired_at",      "TIMESTAMP"),
+            ("circuit_breaker_reason",        "VARCHAR(255)"),
             ("alpaca_pre_stop_mode",          "VARCHAR(10)"),
             ("alpaca_min_close_notional",     "REAL"),
         ]:

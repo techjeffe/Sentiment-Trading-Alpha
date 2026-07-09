@@ -6,7 +6,7 @@ import { AppHeader } from "@/components/AppHeader";
 import DispatchErrorBanner from "@/components/DispatchErrorBanner";
 import {
     TrendingUp, TrendingDown, Minus, RefreshCw, Trash2,
-    DollarSign, BarChart2, Activity,
+    DollarSign, BarChart2, Activity, ChevronDown,
 } from "lucide-react";
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
@@ -447,7 +447,10 @@ export default function TradingPage() {
 
     // ── Circuit breaker state (Option C #4) ─────────────────────────────
     const [circuitBreakerFired, setCircuitBreakerFired] = useState(false);
+    const [circuitBreakerReason, setCircuitBreakerReason] = useState<string | null>(null);
     const [reEnabling, setReEnabling] = useState(false);
+
+    const [paperExpanded, setPaperExpanded] = useState(false);
 
     // Closed trades pagination (older trades beyond the initial 4-day window)
     const [olderTrades, setOlderTrades] = useState<ClosedTrade[]>([]);
@@ -584,6 +587,7 @@ export default function TradingPage() {
             if (cbStatusRes.ok) {
                 const cbStatus = await cbStatusRes.json();
                 setCircuitBreakerFired(!!cbStatus?.circuit_breaker_fired);
+                setCircuitBreakerReason(cbStatus?.reason ?? null);
             }
         } catch { /* silent — Alpaca may not be configured */ }
     }, []);
@@ -813,7 +817,10 @@ export default function TradingPage() {
                         <div>
                             <p className="text-sm font-semibold text-amber-300">Circuit Breaker Active</p>
                             <p className="text-[11px] text-amber-400/80 mt-0.5">
-                                Live trading was auto-disabled by a safety limit. No new orders will be placed until re-enabled.
+                                {circuitBreakerReason
+                                    ? <>Trigger: <span className="font-medium text-amber-300">{circuitBreakerReason}</span>. No new live orders until re-enabled.</>
+                                    : "Live trading was auto-disabled by a safety limit. No new orders will be placed until re-enabled."
+                                }
                             </p>
                         </div>
                     </div>
@@ -1202,35 +1209,6 @@ export default function TradingPage() {
                                     </div>
                                 )}
 
-                                {/* Paper section below the fold */}
-                                <div className="rounded-xl border border-slate-700/40 p-4 space-y-4" style={{ background: "rgba(15,23,42,0.5)" }}>
-                                    <p className="text-[10px] uppercase tracking-widest text-slate-500 font-medium">Paper Track (simulation)</p>
-                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                                        <StatCard label="Net P&L" value={fmtDollar(s!.total_pnl)} sub={`${fmt(s!.total_pnl_pct)}% of deployed`} color={pnlColor(s!.total_pnl)} />
-                                        <StatCard label="Realized" value={fmtDollar(s!.realized_pnl)} sub={`${s!.closed_trades} closed`} color={pnlColor(s!.realized_pnl)} />
-                                        <StatCard label="Win Rate" value={`${s!.win_rate.toFixed(0)}%`} sub={`${s!.win_count}W / ${s!.loss_count}L`} color={s!.win_rate >= 50 ? "text-emerald-400" : "text-red-400"} />
-                                        <StatCard label="Open P&L" value={fmtDollar(derivedOpenPnl)} sub={`${s!.open_positions} open`} color={pnlColor(derivedOpenPnl)} />
-                                    </div>
-                                    <div className="rounded-xl p-5 border border-white/8" style={{ background: "rgba(30,41,59,0.7)" }}>
-                                        <div className="flex items-center gap-2 mb-4">
-                                            <BarChart2 size={14} className="text-slate-400" />
-                                            <p className="text-sm font-semibold text-white">Strategy Paper Equity</p>
-                                            <p className="text-[10px] text-slate-500 ml-auto">Cumulative realized P&L</p>
-                                        </div>
-                                        <EquityCurve data={data.equity_curve} />
-                                    </div>
-                                    {alpacaHistories.paper && (
-                                        <div className="rounded-xl p-5 border border-sky-500/20" style={{ background: "rgba(30,41,59,0.7)" }}>
-                                            <div className="flex items-center gap-2 mb-4">
-                                                <span className="w-2 h-2 rounded-full shrink-0 bg-sky-400" />
-                                                <p className="text-sm font-semibold text-white">Alpaca Paper Equity</p>
-                                                <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider font-medium ml-1 ${modeBadgeClass("paper")}`}>PAPER</span>
-                                                <p className="text-[10px] text-slate-500 ml-auto">30-day broker account equity</p>
-                                            </div>
-                                            <AlpacaEquityCurve history={alpacaHistories.paper} />
-                                        </div>
-                                    )}
-                                </div>
                             </>
                         ) : (
                             <>
@@ -1265,156 +1243,343 @@ export default function TradingPage() {
                             </>
                         )}
 
-                        {/* Open positions */}
-                        {data.open_positions.length > 0 && (
-                            <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: "rgba(30,41,59,0.7)" }}>
-                                <div className="px-5 py-4 border-b border-white/8 flex items-center gap-2">
-                                    <Activity size={14} className="text-emerald-400" />
-                                    <p className="text-sm font-semibold text-white">Strategy Paper Open Positions</p>
-                                    <span className="ml-auto text-[10px] text-slate-500">{data.open_positions.length} position{data.open_positions.length !== 1 ? "s" : ""}</span>
-                                </div>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-xs">
-                                        <thead>
-                                            <tr className="border-b border-white/6 text-[10px] uppercase tracking-wider text-slate-500">
-                                                <th className="px-4 py-2.5 text-left">Ticker</th>
-                                                <th className="px-4 py-2.5 text-left">Direction</th>
-                                                <th className="px-4 py-2.5 text-left">Leverage</th>
-                                                <th className="px-4 py-2.5 text-left">Type</th>
-                                                <th className="px-4 py-2.5 text-left">Window</th>
-                                                <th className="px-4 py-2.5 text-right">Entry</th>
-                                                <th className="px-4 py-2.5 text-right">Current</th>
-                                                <th className="px-4 py-2.5 text-right">P&L</th>
-                                                <th className="px-4 py-2.5 text-left">Entered</th>
-                                                <th className="px-4 py-2.5 text-left">Session</th>
-                                                <th className="px-4 py-2.5 text-right">Actions</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {data.open_positions.map((pos) => {
-                                                const livePrice = livePrices[pos.execution_ticker]?.price;
-                                                const { pnl, pct } = calculateUnrealizedPnl(pos, livePrice);
-                                                const displayPrice = livePrice ?? pos.current_price;
-                                                return (
-                                                    <tr key={pos.id} className="border-b border-white/4 hover:bg-white/4 transition-colors">
-                                                        <td className="px-4 py-3 font-semibold text-white">
-                                                            {pos.execution_ticker}
-                                                            <span className="text-slate-500 font-normal ml-1 text-[10px]">({pos.underlying})</span>
-                                                        </td>
-                                                        <td className="px-4 py-3"><DirectionBadge signal={pos.signal_type} /></td>
-                                                        <td className="px-4 py-3 text-slate-300">{pos.leverage}</td>
-                                                        <td className="px-4 py-3"><ConvictionBadge conviction={pos.conviction_level} tradingType={pos.trading_type} /></td>
-                                                        <td className="px-4 py-3"><WindowBadge active={pos.window_active} remaining={pos.window_remaining_minutes} /></td>
-                                                        <td className="px-4 py-3 text-right font-mono text-slate-300">${pos.entry_price.toFixed(2)}</td>
-                                                        <td className="px-4 py-3 text-right font-mono text-slate-200">${displayPrice.toFixed(2)}</td>
-                                                        <td className="px-4 py-3 text-right">
-                                                            <span className={`inline-block rounded px-1.5 py-0.5 border text-[10px] font-semibold ${pnlBg(pnl)}`}>
-                                                                {fmtDollar(pnl)} ({fmt(pct)}%)
-                                                            </span>
-                                                        </td>
-                                                        <td className="px-4 py-3 text-slate-400">{fmtDate(pos.entered_at)}</td>
-                                                        <td className="px-4 py-3"><SessionBadge session={pos.market_session} /></td>
-                                                        <td className="px-4 py-3 text-right">
-                                                            <button
-                                                                onClick={() => handleClosePosition(pos.id)}
-                                                                className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] font-semibold text-rose-400 hover:bg-rose-500/20 transition-colors"
-                                                            >
-                                                                Close
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        )}
-
-                        {data.open_positions.length === 0 && (
-                            <div className="rounded-xl border border-white/8 px-5 py-6 flex items-center gap-3 text-slate-500 text-sm" style={{ background: "rgba(30,41,59,0.7)" }}>
-                                <Minus size={16} /> No open positions
-                            </div>
-                        )}
-
-                        {/* Closed trades */}
-                        {(data.closed_trades.length > 0 || olderTrades.length > 0) && (
-                            <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: "rgba(30,41,59,0.7)" }}>
-                                <div className="px-5 py-4 border-b border-white/8 flex items-center gap-2">
-                                    <DollarSign size={14} className="text-slate-400" />
-                                    <p className="text-sm font-semibold text-white">Strategy Paper Closed Trades</p>
-                                    <span className="ml-auto text-[10px] text-slate-500">
-                                        {data.closed_trades.length + olderTrades.length} trades
-                                        {totalOlderAvailable != null && (
-                                            <span className="ml-1">({totalOlderAvailable} older available)</span>
+                        {/* ── Paper Trading: collapsible expander when Alpaca Live is active ── */}
+                        {preferredTrack === "alpaca_live" ? (
+                            <div className="rounded-xl border border-slate-700/40 overflow-hidden" style={{ background: "rgba(15,23,42,0.5)" }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setPaperExpanded(p => !p)}
+                                    className="w-full px-5 py-4 flex items-center justify-between hover:bg-white/4 transition-colors"
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <BarChart2 size={14} className="text-slate-500" />
+                                        <span className="text-sm font-medium text-slate-400">Paper Trading</span>
+                                        <span className="text-[10px] text-slate-600 ml-1">strategy simulation</span>
+                                    </div>
+                                    <ChevronDown size={14} className={`text-slate-500 transition-transform duration-200 ${paperExpanded ? "rotate-180" : ""}`} />
+                                </button>
+                                {paperExpanded && (
+                                    <div className="border-t border-slate-700/40 px-4 pb-4 pt-4 space-y-4">
+                                        {/* Paper stats */}
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                            <StatCard label="Net P&L" value={fmtDollar(s!.total_pnl)} sub={`${fmt(s!.total_pnl_pct)}% of deployed`} color={pnlColor(s!.total_pnl)} />
+                                            <StatCard label="Realized" value={fmtDollar(s!.realized_pnl)} sub={`${s!.closed_trades} closed`} color={pnlColor(s!.realized_pnl)} />
+                                            <StatCard label="Win Rate" value={`${s!.win_rate.toFixed(0)}%`} sub={`${s!.win_count}W / ${s!.loss_count}L`} color={s!.win_rate >= 50 ? "text-emerald-400" : "text-red-400"} />
+                                            <StatCard label="Open P&L" value={fmtDollar(derivedOpenPnl)} sub={`${s!.open_positions} open`} color={pnlColor(derivedOpenPnl)} />
+                                        </div>
+                                        {/* Paper equity curves */}
+                                        <div className="rounded-xl p-5 border border-white/8" style={{ background: "rgba(30,41,59,0.7)" }}>
+                                            <div className="flex items-center gap-2 mb-4">
+                                                <BarChart2 size={14} className="text-slate-400" />
+                                                <p className="text-sm font-semibold text-white">Strategy Paper Equity</p>
+                                                <p className="text-[10px] text-slate-500 ml-auto">Cumulative realized P&L</p>
+                                            </div>
+                                            <EquityCurve data={data.equity_curve} />
+                                        </div>
+                                        {alpacaHistories.paper && (
+                                            <div className="rounded-xl p-5 border border-sky-500/20" style={{ background: "rgba(30,41,59,0.7)" }}>
+                                                <div className="flex items-center gap-2 mb-4">
+                                                    <span className="w-2 h-2 rounded-full shrink-0 bg-sky-400" />
+                                                    <p className="text-sm font-semibold text-white">Alpaca Paper Equity</p>
+                                                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider font-medium ml-1 ${modeBadgeClass("paper")}`}>PAPER</span>
+                                                    <p className="text-[10px] text-slate-500 ml-auto">30-day broker account equity</p>
+                                                </div>
+                                                <AlpacaEquityCurve history={alpacaHistories.paper} />
+                                            </div>
                                         )}
-                                    </span>
-                                </div>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-xs">
-                                        <thead>
-                                            <tr className="border-b border-white/6 text-[10px] uppercase tracking-wider text-slate-500">
-                                                <th className="px-4 py-2.5 text-left">Ticker</th>
-                                                <th className="px-4 py-2.5 text-left">Direction</th>
-                                                <th className="px-4 py-2.5 text-left">Leverage</th>
-                                                <th className="px-4 py-2.5 text-right">Entry</th>
-                                                <th className="px-4 py-2.5 text-right">Exit</th>
-                                                <th className="px-4 py-2.5 text-right">Realized P&L</th>
-                                                <th className="px-4 py-2.5 text-left">Closed At</th>
-                                                <th className="px-4 py-2.5 text-left">Session</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {[...data.closed_trades, ...olderTrades].map((trade) => (
-                                                <tr key={trade.id} className="border-b border-white/4 hover:bg-white/4 transition-colors">
-                                                    <td className="px-4 py-3 font-semibold text-white">
-                                                        {trade.execution_ticker}
-                                                        <span className="text-slate-500 font-normal ml-1 text-[10px]">({trade.underlying})</span>
-                                                    </td>
-                                                    <td className="px-4 py-3"><DirectionBadge signal={trade.signal_type} /></td>
-                                                    <td className="px-4 py-3 text-slate-300">{trade.leverage}</td>
-                                                    <td className="px-4 py-3 text-right font-mono text-slate-300">${trade.entry_price.toFixed(2)}</td>
-                                                    <td className="px-4 py-3 text-right font-mono text-slate-300">${trade.exit_price.toFixed(2)}</td>
-                                                    <td className="px-4 py-3 text-right">
-                                                        <span className={`inline-block rounded px-1.5 py-0.5 border text-[10px] font-semibold ${pnlBg(trade.realized_pnl)}`}>
-                                                            {fmtDollar(trade.realized_pnl)} ({fmt(trade.realized_pnl_pct)}%)
-                                                        </span>
-                                                    </td>
-                                                    <td className="px-4 py-3 text-slate-400">{fmtDate(trade.exited_at)}</td>
-                                                    <td className="px-4 py-3"><SessionBadge session={trade.market_session} /></td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                                {/* Show More button — always show when there are trades, hide when API returns empty */}
-                                {data.closed_trades.length > 0 && !olderTradesLoadingFirst && (
-                                    <div className="px-5 py-4 border-t border-white/6 flex justify-center">
-                                        <button
-                                            type="button"
-                                            onClick={loadOlderTrades}
-                                            disabled={loadingOlder}
-                                            className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-800/60 px-4 py-2 text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                        >
-                                            {loadingOlder ? (
-                                                <>
-                                                    <RefreshCw size={12} className="animate-spin" /> Loading...
-                                                </>
-                                            ) : (
-                                                <>
-                                                    Show More Older Trades
-                                                </>
-                                            )}
-                                        </button>
+                                        {/* Paper open positions */}
+                                        {data.open_positions.length > 0 ? (
+                                            <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: "rgba(30,41,59,0.7)" }}>
+                                                <div className="px-5 py-4 border-b border-white/8 flex items-center gap-2">
+                                                    <Activity size={14} className="text-emerald-400" />
+                                                    <p className="text-sm font-semibold text-white">Strategy Paper Open Positions</p>
+                                                    <span className="ml-auto text-[10px] text-slate-500">{data.open_positions.length} position{data.open_positions.length !== 1 ? "s" : ""}</span>
+                                                </div>
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full text-xs">
+                                                        <thead>
+                                                            <tr className="border-b border-white/6 text-[10px] uppercase tracking-wider text-slate-500">
+                                                                <th className="px-4 py-2.5 text-left">Ticker</th>
+                                                                <th className="px-4 py-2.5 text-left">Direction</th>
+                                                                <th className="px-4 py-2.5 text-left">Leverage</th>
+                                                                <th className="px-4 py-2.5 text-left">Type</th>
+                                                                <th className="px-4 py-2.5 text-left">Window</th>
+                                                                <th className="px-4 py-2.5 text-right">Entry</th>
+                                                                <th className="px-4 py-2.5 text-right">Current</th>
+                                                                <th className="px-4 py-2.5 text-right">P&L</th>
+                                                                <th className="px-4 py-2.5 text-left">Entered</th>
+                                                                <th className="px-4 py-2.5 text-left">Session</th>
+                                                                <th className="px-4 py-2.5 text-right">Actions</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {data.open_positions.map((pos) => {
+                                                                const livePrice = livePrices[pos.execution_ticker]?.price;
+                                                                const { pnl, pct } = calculateUnrealizedPnl(pos, livePrice);
+                                                                const displayPrice = livePrice ?? pos.current_price;
+                                                                return (
+                                                                    <tr key={pos.id} className="border-b border-white/4 hover:bg-white/4 transition-colors">
+                                                                        <td className="px-4 py-3 font-semibold text-white">
+                                                                            {pos.execution_ticker}
+                                                                            <span className="text-slate-500 font-normal ml-1 text-[10px]">({pos.underlying})</span>
+                                                                        </td>
+                                                                        <td className="px-4 py-3"><DirectionBadge signal={pos.signal_type} /></td>
+                                                                        <td className="px-4 py-3 text-slate-300">{pos.leverage}</td>
+                                                                        <td className="px-4 py-3"><ConvictionBadge conviction={pos.conviction_level} tradingType={pos.trading_type} /></td>
+                                                                        <td className="px-4 py-3"><WindowBadge active={pos.window_active} remaining={pos.window_remaining_minutes} /></td>
+                                                                        <td className="px-4 py-3 text-right font-mono text-slate-300">${pos.entry_price.toFixed(2)}</td>
+                                                                        <td className="px-4 py-3 text-right font-mono text-slate-200">${displayPrice.toFixed(2)}</td>
+                                                                        <td className="px-4 py-3 text-right">
+                                                                            <span className={`inline-block rounded px-1.5 py-0.5 border text-[10px] font-semibold ${pnlBg(pnl)}`}>
+                                                                                {fmtDollar(pnl)} ({fmt(pct)}%)
+                                                                            </span>
+                                                                        </td>
+                                                                        <td className="px-4 py-3 text-slate-400">{fmtDate(pos.entered_at)}</td>
+                                                                        <td className="px-4 py-3"><SessionBadge session={pos.market_session} /></td>
+                                                                        <td className="px-4 py-3 text-right">
+                                                                            <button
+                                                                                onClick={() => handleClosePosition(pos.id)}
+                                                                                className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] font-semibold text-rose-400 hover:bg-rose-500/20 transition-colors"
+                                                                            >
+                                                                                Close
+                                                                            </button>
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="rounded-xl border border-white/8 px-5 py-6 flex items-center gap-3 text-slate-500 text-sm" style={{ background: "rgba(30,41,59,0.7)" }}>
+                                                <Minus size={16} /> No open positions
+                                            </div>
+                                        )}
+                                        {/* Paper closed trades */}
+                                        {(data.closed_trades.length > 0 || olderTrades.length > 0) ? (
+                                            <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: "rgba(30,41,59,0.7)" }}>
+                                                <div className="px-5 py-4 border-b border-white/8 flex items-center gap-2">
+                                                    <DollarSign size={14} className="text-slate-400" />
+                                                    <p className="text-sm font-semibold text-white">Strategy Paper Closed Trades</p>
+                                                    <span className="ml-auto text-[10px] text-slate-500">
+                                                        {data.closed_trades.length + olderTrades.length} trades
+                                                        {totalOlderAvailable != null && (
+                                                            <span className="ml-1">({totalOlderAvailable} older available)</span>
+                                                        )}
+                                                    </span>
+                                                </div>
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full text-xs">
+                                                        <thead>
+                                                            <tr className="border-b border-white/6 text-[10px] uppercase tracking-wider text-slate-500">
+                                                                <th className="px-4 py-2.5 text-left">Ticker</th>
+                                                                <th className="px-4 py-2.5 text-left">Direction</th>
+                                                                <th className="px-4 py-2.5 text-left">Leverage</th>
+                                                                <th className="px-4 py-2.5 text-right">Entry</th>
+                                                                <th className="px-4 py-2.5 text-right">Exit</th>
+                                                                <th className="px-4 py-2.5 text-right">Realized P&L</th>
+                                                                <th className="px-4 py-2.5 text-left">Closed At</th>
+                                                                <th className="px-4 py-2.5 text-left">Session</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {[...data.closed_trades, ...olderTrades].map((trade) => (
+                                                                <tr key={trade.id} className="border-b border-white/4 hover:bg-white/4 transition-colors">
+                                                                    <td className="px-4 py-3 font-semibold text-white">
+                                                                        {trade.execution_ticker}
+                                                                        <span className="text-slate-500 font-normal ml-1 text-[10px]">({trade.underlying})</span>
+                                                                    </td>
+                                                                    <td className="px-4 py-3"><DirectionBadge signal={trade.signal_type} /></td>
+                                                                    <td className="px-4 py-3 text-slate-300">{trade.leverage}</td>
+                                                                    <td className="px-4 py-3 text-right font-mono text-slate-300">${trade.entry_price.toFixed(2)}</td>
+                                                                    <td className="px-4 py-3 text-right font-mono text-slate-300">${trade.exit_price.toFixed(2)}</td>
+                                                                    <td className="px-4 py-3 text-right">
+                                                                        <span className={`inline-block rounded px-1.5 py-0.5 border text-[10px] font-semibold ${pnlBg(trade.realized_pnl)}`}>
+                                                                            {fmtDollar(trade.realized_pnl)} ({fmt(trade.realized_pnl_pct)}%)
+                                                                        </span>
+                                                                    </td>
+                                                                    <td className="px-4 py-3 text-slate-400">{fmtDate(trade.exited_at)}</td>
+                                                                    <td className="px-4 py-3"><SessionBadge session={trade.market_session} /></td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                                {data.closed_trades.length > 0 && !olderTradesLoadingFirst && (
+                                                    <div className="px-5 py-4 border-t border-white/6 flex justify-center">
+                                                        <button
+                                                            type="button"
+                                                            onClick={loadOlderTrades}
+                                                            disabled={loadingOlder}
+                                                            className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-800/60 px-4 py-2 text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        >
+                                                            {loadingOlder ? <><RefreshCw size={12} className="animate-spin" /> Loading...</> : <>Show More Older Trades</>}
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <div className="rounded-xl border border-white/8 px-5 py-6 flex items-center gap-3 text-slate-500 text-sm" style={{ background: "rgba(30,41,59,0.7)" }}>
+                                                <Minus size={16} /> No closed trades yet &mdash; trades close when the signal changes or flips direction
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>
-                        )}
+                        ) : (
+                            <>
+                                {/* Open positions */}
+                                {data.open_positions.length > 0 && (
+                                    <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: "rgba(30,41,59,0.7)" }}>
+                                        <div className="px-5 py-4 border-b border-white/8 flex items-center gap-2">
+                                            <Activity size={14} className="text-emerald-400" />
+                                            <p className="text-sm font-semibold text-white">Strategy Paper Open Positions</p>
+                                            <span className="ml-auto text-[10px] text-slate-500">{data.open_positions.length} position{data.open_positions.length !== 1 ? "s" : ""}</span>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-xs">
+                                                <thead>
+                                                    <tr className="border-b border-white/6 text-[10px] uppercase tracking-wider text-slate-500">
+                                                        <th className="px-4 py-2.5 text-left">Ticker</th>
+                                                        <th className="px-4 py-2.5 text-left">Direction</th>
+                                                        <th className="px-4 py-2.5 text-left">Leverage</th>
+                                                        <th className="px-4 py-2.5 text-left">Type</th>
+                                                        <th className="px-4 py-2.5 text-left">Window</th>
+                                                        <th className="px-4 py-2.5 text-right">Entry</th>
+                                                        <th className="px-4 py-2.5 text-right">Current</th>
+                                                        <th className="px-4 py-2.5 text-right">P&L</th>
+                                                        <th className="px-4 py-2.5 text-left">Entered</th>
+                                                        <th className="px-4 py-2.5 text-left">Session</th>
+                                                        <th className="px-4 py-2.5 text-right">Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {data.open_positions.map((pos) => {
+                                                        const livePrice = livePrices[pos.execution_ticker]?.price;
+                                                        const { pnl, pct } = calculateUnrealizedPnl(pos, livePrice);
+                                                        const displayPrice = livePrice ?? pos.current_price;
+                                                        return (
+                                                            <tr key={pos.id} className="border-b border-white/4 hover:bg-white/4 transition-colors">
+                                                                <td className="px-4 py-3 font-semibold text-white">
+                                                                    {pos.execution_ticker}
+                                                                    <span className="text-slate-500 font-normal ml-1 text-[10px]">({pos.underlying})</span>
+                                                                </td>
+                                                                <td className="px-4 py-3"><DirectionBadge signal={pos.signal_type} /></td>
+                                                                <td className="px-4 py-3 text-slate-300">{pos.leverage}</td>
+                                                                <td className="px-4 py-3"><ConvictionBadge conviction={pos.conviction_level} tradingType={pos.trading_type} /></td>
+                                                                <td className="px-4 py-3"><WindowBadge active={pos.window_active} remaining={pos.window_remaining_minutes} /></td>
+                                                                <td className="px-4 py-3 text-right font-mono text-slate-300">${pos.entry_price.toFixed(2)}</td>
+                                                                <td className="px-4 py-3 text-right font-mono text-slate-200">${displayPrice.toFixed(2)}</td>
+                                                                <td className="px-4 py-3 text-right">
+                                                                    <span className={`inline-block rounded px-1.5 py-0.5 border text-[10px] font-semibold ${pnlBg(pnl)}`}>
+                                                                        {fmtDollar(pnl)} ({fmt(pct)}%)
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-4 py-3 text-slate-400">{fmtDate(pos.entered_at)}</td>
+                                                                <td className="px-4 py-3"><SessionBadge session={pos.market_session} /></td>
+                                                                <td className="px-4 py-3 text-right">
+                                                                    <button
+                                                                        onClick={() => handleClosePosition(pos.id)}
+                                                                        className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] font-semibold text-rose-400 hover:bg-rose-500/20 transition-colors"
+                                                                    >
+                                                                        Close
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
 
-                        {data.closed_trades.length === 0 && olderTrades.length === 0 && (
-                            <div className="rounded-xl border border-white/8 px-5 py-6 flex items-center gap-3 text-slate-500 text-sm" style={{ background: "rgba(30,41,59,0.7)" }}>
-                                <Minus size={16} /> No closed trades yet &mdash; trades close when the signal changes or flips direction
-                            </div>
+                                {data.open_positions.length === 0 && (
+                                    <div className="rounded-xl border border-white/8 px-5 py-6 flex items-center gap-3 text-slate-500 text-sm" style={{ background: "rgba(30,41,59,0.7)" }}>
+                                        <Minus size={16} /> No open positions
+                                    </div>
+                                )}
+
+                                {/* Closed trades */}
+                                {(data.closed_trades.length > 0 || olderTrades.length > 0) && (
+                                    <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: "rgba(30,41,59,0.7)" }}>
+                                        <div className="px-5 py-4 border-b border-white/8 flex items-center gap-2">
+                                            <DollarSign size={14} className="text-slate-400" />
+                                            <p className="text-sm font-semibold text-white">Strategy Paper Closed Trades</p>
+                                            <span className="ml-auto text-[10px] text-slate-500">
+                                                {data.closed_trades.length + olderTrades.length} trades
+                                                {totalOlderAvailable != null && (
+                                                    <span className="ml-1">({totalOlderAvailable} older available)</span>
+                                                )}
+                                            </span>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-xs">
+                                                <thead>
+                                                    <tr className="border-b border-white/6 text-[10px] uppercase tracking-wider text-slate-500">
+                                                        <th className="px-4 py-2.5 text-left">Ticker</th>
+                                                        <th className="px-4 py-2.5 text-left">Direction</th>
+                                                        <th className="px-4 py-2.5 text-left">Leverage</th>
+                                                        <th className="px-4 py-2.5 text-right">Entry</th>
+                                                        <th className="px-4 py-2.5 text-right">Exit</th>
+                                                        <th className="px-4 py-2.5 text-right">Realized P&L</th>
+                                                        <th className="px-4 py-2.5 text-left">Closed At</th>
+                                                        <th className="px-4 py-2.5 text-left">Session</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {[...data.closed_trades, ...olderTrades].map((trade) => (
+                                                        <tr key={trade.id} className="border-b border-white/4 hover:bg-white/4 transition-colors">
+                                                            <td className="px-4 py-3 font-semibold text-white">
+                                                                {trade.execution_ticker}
+                                                                <span className="text-slate-500 font-normal ml-1 text-[10px]">({trade.underlying})</span>
+                                                            </td>
+                                                            <td className="px-4 py-3"><DirectionBadge signal={trade.signal_type} /></td>
+                                                            <td className="px-4 py-3 text-slate-300">{trade.leverage}</td>
+                                                            <td className="px-4 py-3 text-right font-mono text-slate-300">${trade.entry_price.toFixed(2)}</td>
+                                                            <td className="px-4 py-3 text-right font-mono text-slate-300">${trade.exit_price.toFixed(2)}</td>
+                                                            <td className="px-4 py-3 text-right">
+                                                                <span className={`inline-block rounded px-1.5 py-0.5 border text-[10px] font-semibold ${pnlBg(trade.realized_pnl)}`}>
+                                                                    {fmtDollar(trade.realized_pnl)} ({fmt(trade.realized_pnl_pct)}%)
+                                                                </span>
+                                                            </td>
+                                                            <td className="px-4 py-3 text-slate-400">{fmtDate(trade.exited_at)}</td>
+                                                            <td className="px-4 py-3"><SessionBadge session={trade.market_session} /></td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        {data.closed_trades.length > 0 && !olderTradesLoadingFirst && (
+                                            <div className="px-5 py-4 border-t border-white/6 flex justify-center">
+                                                <button
+                                                    type="button"
+                                                    onClick={loadOlderTrades}
+                                                    disabled={loadingOlder}
+                                                    className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-800/60 px-4 py-2 text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                >
+                                                    {loadingOlder ? (
+                                                        <>
+                                                            <RefreshCw size={12} className="animate-spin" /> Loading...
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            Show More Older Trades
+                                                        </>
+                                                    )}
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {data.closed_trades.length === 0 && olderTrades.length === 0 && (
+                                    <div className="rounded-xl border border-white/8 px-5 py-6 flex items-center gap-3 text-slate-500 text-sm" style={{ background: "rgba(30,41,59,0.7)" }}>
+                                        <Minus size={16} /> No closed trades yet &mdash; trades close when the signal changes or flips direction
+                                    </div>
+                                )}
+                            </>
                         )}
                     </>
                 )}
@@ -1458,6 +1623,7 @@ export default function TradingPage() {
                                         <th className="px-4 py-2.5 text-right">Fill Price</th>
                                         <th className="px-4 py-2.5 text-left">Mode</th>
                                         <th className="px-4 py-2.5 text-left">Submitted</th>
+                                        <th className="px-4 py-2.5 text-left">Filled</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1508,6 +1674,7 @@ export default function TradingPage() {
                                                     </span>
                                                 </td>
                                                 <td className="px-4 py-3 text-slate-500">{fmtDate(order.submitted_at)}</td>
+                                                <td className="px-4 py-3 text-slate-500">{order.filled_at ? fmtDate(order.filled_at) : "—"}</td>
                                             </tr>
                                         );
                                     })}

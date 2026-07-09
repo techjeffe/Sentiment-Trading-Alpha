@@ -1043,6 +1043,10 @@ def update_app_config(db: Session, payload: Dict[str, Any]) -> AppConfig:
         config.alpaca_daily_loss_limit_usd = _normalize_trading_logic_float(payload.get("alpaca_daily_loss_limit_usd"), 1.0, 1_000_000.0)
     if "alpaca_max_consecutive_losses" in payload:
         config.alpaca_max_consecutive_losses = _normalize_trading_logic_int(payload.get("alpaca_max_consecutive_losses"), 1, 50)
+    if "circuit_breaker_fired_at" in payload:
+        config.circuit_breaker_fired_at = payload.get("circuit_breaker_fired_at")
+    if "circuit_breaker_reason" in payload:
+        config.circuit_breaker_reason = payload.get("circuit_breaker_reason")
     # ── Strategy feature toggles (null = use logic_config.json default) ──
     if "continuous_entry_enabled" in payload:
         val = payload.get("continuous_entry_enabled")

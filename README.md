@@ -229,7 +229,7 @@ The Admin page is where you configure everything. Changes persist in the databas
 - **RSS Sources** — enable/disable built-in feeds; add up to 3 custom feeds with display labels
 - **Prompt Overrides** — per-symbol specialist prompt guidance
 - **Scheduling & System** — auto-run cadence, snapshot retention limit, display timezone
-- **Telegram** — bot token, private chat ID, authorized user ID stored in OS keychain; enable Remote Snapshots and Remote Control independently
+- **Telegram** — bot token, private chat ID, authorized user ID stored in OS keychain; enable Remote Snapshots and Remote Control independently. Remote Control commands: `/status`, `/stop`, `/start`, `/live on`, `/live off`, `/snapshot`, `/help`
 - **Price History** — pull and view per-symbol OHLCV history; used for technical indicator computation
 - **Live Trading (Alpaca)** — API key entry, paper/live mode, guardrails (position cap, total exposure cap, daily loss limit, consecutive-loss circuit breaker), and the enable/disable toggle with a "type LIVE to confirm" modal
 
@@ -250,6 +250,7 @@ When Alpaca keys are configured and live trading is enabled, every paper trade o
 - Available shares check — close orders never sell more than Alpaca allows
 - Circuit breaker recovery UI — amber banner with one-click re-enable when the breaker fires
 - All order attempts written to an audit log regardless of outcome
+- Telegram remote control — `/live on` and `/live off` commands to arm or disarm live execution from your phone without opening the Admin UI
 
 ---
 

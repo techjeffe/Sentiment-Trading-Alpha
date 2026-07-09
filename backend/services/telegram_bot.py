@@ -5,14 +5,16 @@ Security model:
   - Only one private chat_id is allowed.
   - Only one Telegram user_id inside that private chat is allowed.
   - Messages from any other chat_id or sender_id are silently ignored.
-  - Only /stop and /start mutate state. /snapshot requests async delivery.
+  - Only /stop, /start, and /live mutate state. /snapshot requests async delivery.
 
 Commands:
-  /status   — report current alpaca_execution_mode
-  /stop     — set mode to "off", save previous mode for resumption
-  /start    — restore previously saved mode
-  /snapshot — remotely request current P&L snapshot via Telegram
-  /help     — list commands
+  /status      — report current alpaca_execution_mode
+  /stop        — set mode to "off", save previous mode for resumption
+  /start       — restore previously saved mode
+  /live on     — enable live trading (real orders)
+  /live off    — disable live trading, revert to paper mode
+  /snapshot    — remotely request current P&L snapshot via Telegram
+  /help        — list commands
 """
 
 import time
@@ -139,6 +141,52 @@ def _handle_start(token: str, chat_id: str) -> None:
         db.close()
 
 
+def _handle_live(token: str, chat_id: str, args: list) -> None:
+    from database.engine import SessionLocal
+    from services.app_config import get_or_create_app_config, update_app_config
+    if not args or args[0].lower() not in ("on", "off"):
+        _send(token, chat_id, "Usage: /live on  or  /live off")
+        return
+    action = args[0].lower()
+    db = SessionLocal()
+    try:
+        config = get_or_create_app_config(db)
+        current_mode = (config.alpaca_execution_mode or "off").lower()
+        current_live = bool(getattr(config, "alpaca_live_trading_enabled", False))
+        if action == "on":
+            if current_live and current_mode == "live":
+                _send(token, chat_id, "Live trading is already enabled.")
+                return
+            config = update_app_config(db, {
+                "alpaca_execution_mode": "live",
+                "alpaca_live_trading_enabled": True,
+            })
+            _set_remote_control_banner(config, "Remote Telegram control enabled live trading.")
+            db.add(config)
+            db.commit()
+            _send(token, chat_id, "⚠️ <b>Live trading ENABLED.</b>\nOrders will hit real markets.")
+            print("[telegram-bot] /live on — live trading enabled")
+        else:
+            if not current_live or current_mode != "live":
+                _send(token, chat_id, f"Live trading is already disabled (mode: {current_mode.upper()}).")
+                return
+            config = update_app_config(db, {
+                "alpaca_execution_mode": "paper",
+                "alpaca_live_trading_enabled": False,
+            })
+            _set_remote_control_banner(config, "Remote Telegram control disabled live trading. Reverted to paper mode.")
+            db.add(config)
+            db.commit()
+            _send(token, chat_id, "✅ Live trading <b>disabled</b>. Reverted to paper mode.")
+            print("[telegram-bot] /live off — live trading disabled, reverted to paper mode")
+    except Exception as exc:
+        db.rollback()
+        print(f"[telegram-bot] live command error: {exc}")
+        _send_generic_error(token, chat_id, "Live trading command")
+    finally:
+        db.close()
+
+
 def _handle_snapshot(token: str, chat_id: str) -> None:
     """Request a P&L snapshot delivery to this chat."""
     from database.engine import SessionLocal
@@ -191,19 +239,23 @@ def _dispatch(update: dict, token: str, authorized_chat_id: str, authorized_user
         print(f"[telegram-bot] rejected: unauthorized sender_id {sender_id} (expected {authorized_user_id})")
         return
 
-    # Parse command, stripping optional @BotName suffix
-    raw_command = text.split()[0].lower() if text else ""
+    # Parse command and any trailing arguments
+    parts = text.split() if text else []
+    raw_command = parts[0].lower() if parts else ""
     command = raw_command.split("@")[0]
-    print(f"[telegram-bot] accepted command: {command}")
+    args = parts[1:]
+    print(f"[telegram-bot] accepted command: {command} {args}")
 
     if command == "/help":
         _send(token, chat_id, (
             "<b>Remote trading controls</b>\n\n"
-            "/status   — current trading mode\n"
-            "/stop     — disable all Alpaca trading\n"
-            "/start    — resume previous trading mode\n"
-            "/snapshot — request P&L snapshot\n"
-            "/help     — show this message"
+            "/status      — current trading mode\n"
+            "/stop        — disable all Alpaca trading\n"
+            "/start       — resume previous trading mode\n"
+            "/live on     — enable live trading (real orders)\n"
+            "/live off    — disable live trading → paper mode\n"
+            "/snapshot    — request P&L snapshot\n"
+            "/help        — show this message"
         ))
     elif command == "/status":
         _handle_status(token, chat_id)
@@ -211,6 +263,8 @@ def _dispatch(update: dict, token: str, authorized_chat_id: str, authorized_user
         _handle_stop(token, chat_id)
     elif command == "/start":
         _handle_start(token, chat_id)
+    elif command == "/live":
+        _handle_live(token, chat_id, args)
     elif command == "/snapshot":
         _handle_snapshot(token, chat_id)
     else:

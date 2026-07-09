@@ -796,6 +796,8 @@ async def re_enable_circuit_breaker(
     config = update_app_config(db, {
         "alpaca_execution_mode": "live",
         "alpaca_live_trading_enabled": True,
+        "circuit_breaker_fired_at": None,
+        "circuit_breaker_reason": None,
     })
 
     # Best-effort: cancel all open orders on Alpaca before re-enabling
@@ -827,11 +829,14 @@ async def get_circuit_breaker_status(
     the last known reason if available.
     """
     config = get_or_create_app_config(db)
-    is_disabled = not bool(getattr(config, "alpaca_live_trading_enabled", True))
     execution_mode = str(getattr(config, "alpaca_execution_mode", "off") or "off")
+    fired_at = getattr(config, "circuit_breaker_fired_at", None)
+    reason = getattr(config, "circuit_breaker_reason", None)
 
     return {
-        "circuit_breaker_fired": is_disabled and execution_mode == "live",
-        "live_trading_enabled": bool(getattr(config, "alpaca_live_trading_enabled", True)),
+        "circuit_breaker_fired": fired_at is not None,
+        "live_trading_enabled": bool(getattr(config, "alpaca_live_trading_enabled", False)),
         "execution_mode": execution_mode,
+        "reason": reason,
+        "fired_at": fired_at.isoformat() if fired_at else None,
     }

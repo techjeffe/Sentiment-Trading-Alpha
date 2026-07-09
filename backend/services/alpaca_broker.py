@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math as _math
 import time as _time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import quote
 
@@ -79,22 +79,24 @@ def _detect_wash_trade_error(exc: Exception) -> Optional[str]:
     """Check if an Alpaca error indicates a potential wash trade.
 
     Returns the existing_order_id from the error response if detected, else None.
-    Alpaca returns 403 with a message like:
-      "Potential wash trade detected for {symbol}. Existing order id: {id}"
+    Alpaca returns 403 with messages like:
+      JSON: {"existing_order_id": "uuid"}
+      Text: "Potential wash trade detected for {symbol}. Existing order id: {id}"
     """
     detail = str(exc)
     if "wash trade" not in detail.lower() and "403" not in detail:
         return None
     # Try to extract existing_order_id from the error detail
     import re
-    match = re.search(r"existing.order.id[:\s]+([a-f0-9-]+)", detail, re.IGNORECASE)
+    # Handle both JSON format (existing_order_id: "uuid") and text format (existing order id: uuid)
+    match = re.search(r"existing[_\s]?order[_\s]?id[:\s]+[\"']?([a-f0-9-]+)[\"']?", detail, re.IGNORECASE)
     if match:
         return match.group(1)
     # Also check the raw HTTP response if available
     if hasattr(exc, "response"):
         try:
             body = exc.response.text if hasattr(exc, "response") else ""
-            match = re.search(r"existing.order.id[:\s]+([a-f0-9-]+)", body, re.IGNORECASE)
+            match = re.search(r"existing[_\s]?order[_\s]?id[:\s]+[\"']?([a-f0-9-]+)[\"']?", body, re.IGNORECASE)
             if match:
                 return match.group(1)
         except Exception:
@@ -471,7 +473,7 @@ def _get_alpaca_live_recent_pnls(db, n: int) -> Optional[List[float]]:
     from database.models import AlpacaOrder
 
     _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-    _cutoff = datetime.now(timezone.utc)
+    _cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     try:
         orders = (
             db.query(AlpacaOrder)
@@ -551,31 +553,19 @@ def _check_circuit_breakers(db, config, pending_notional: float = 0.0) -> None:
                 + pending_notional
             )
             if open_exposure >= max_exposure:
-                _disable_live_trading(db, config, f"max total exposure ${max_exposure:.0f} reached (current ${open_exposure:.0f})")
+                # Paper mode: block this order but never touch live trading state
                 raise CircuitBreakerError(f"Max total exposure ${max_exposure:.0f} reached")
 
-    # ── Daily loss limit ─────────────────────────────────────────────────────
+    # ── Daily loss limit (real money only — not paper) ──────────────────────
     daily_limit = getattr(config, "alpaca_daily_loss_limit_usd", None)
-    if daily_limit and daily_limit > 0:
-        if is_live:
-            if live_broker is None:
-                print("[alpaca] daily loss check: no live broker configured, skipping")
-            else:
-                today_pnl = _get_alpaca_live_daily_pnl(live_broker)
-                if today_pnl is None:
-                    print("[alpaca] daily loss check: account fetch failed, skipping")
-                elif today_pnl <= -daily_limit:
-                    _disable_live_trading(db, config, f"daily loss limit ${daily_limit:.0f} hit (P&L ${today_pnl:.2f})")
-                    raise CircuitBreakerError(f"Daily loss limit ${daily_limit:.0f} hit")
+    if daily_limit and daily_limit > 0 and is_live:
+        if live_broker is None:
+            print("[alpaca] daily loss check: no live broker configured, skipping")
         else:
-            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-            today_pnl = sum(
-                float(t.realized_pnl or 0)
-                for t in db.query(PaperTrade)
-                .filter(PaperTrade.exited_at >= today_start, PaperTrade.realized_pnl.isnot(None))
-                .all()
-            )
-            if today_pnl <= -daily_limit:
+            today_pnl = _get_alpaca_live_daily_pnl(live_broker)
+            if today_pnl is None:
+                print("[alpaca] daily loss check: account fetch failed, skipping")
+            elif today_pnl <= -daily_limit:
                 _disable_live_trading(db, config, f"daily loss limit ${daily_limit:.0f} hit (P&L ${today_pnl:.2f})")
                 raise CircuitBreakerError(f"Daily loss limit ${daily_limit:.0f} hit")
 
@@ -598,7 +588,7 @@ def _check_circuit_breakers(db, config, pending_notional: float = 0.0) -> None:
                 .all()
             )
             if len(recent) >= max_consec and all(float(t.realized_pnl or 0) < 0 for t in recent):
-                _disable_live_trading(db, config, f"{max_consec} consecutive losses")
+                # Paper mode: block this order but never touch live trading state
                 raise CircuitBreakerError(f"{max_consec} consecutive losses reached")
 
 
@@ -606,6 +596,8 @@ def _disable_live_trading(db, config, reason: str) -> None:
     try:
         config.alpaca_execution_mode = "off"
         config.alpaca_live_trading_enabled = False
+        config.circuit_breaker_fired_at = datetime.now(timezone.utc)
+        config.circuit_breaker_reason = reason
         db.add(config)
         db.commit()
         print(f"[alpaca] CIRCUIT BREAKER — live trading auto-disabled: {reason}")
@@ -1123,18 +1115,30 @@ def _same_trading_day_as_now(ts: Optional[datetime]) -> bool:
     return ts.astimezone(_ET).date() == datetime.now(_ET).date()
 
 
-def _get_entry_conviction_block_reason(paper_trade, event: str, risk_profile: Optional[str] = None) -> Optional[str]:
+def _get_entry_conviction_block_reason(
+    paper_trade,
+    event: str,
+    risk_profile: Optional[str] = None,
+    live_side: Optional[str] = None,
+) -> Optional[str]:
     """Check if the conviction level blocks this trade entry.
 
     Crazy profile allows LOW conviction entries (matching paper_trading.py logic).
-    All other profiles block LOW conviction entries unconditionally.
+    All other profiles block LOW conviction *fresh* entries, but allow LOW conviction
+    accumulation when a matching live position already exists (same side).
     """
     if event != "open":
         return None
     conviction = str(getattr(paper_trade, "conviction_level", "MEDIUM") or "MEDIUM").upper()
     if conviction == "LOW":
-        # Crazy profile allows LOW conviction entries
+        # Crazy profile allows LOW conviction entries unconditionally
         if risk_profile and str(risk_profile).strip().lower() == "crazy":
+            return None
+        # Allow accumulation into an existing same-side live position
+        signal_type = str(getattr(paper_trade, "signal_type", "LONG") or "LONG").upper()
+        wants_long = signal_type == "LONG"
+        position_matches = (wants_long and live_side == "long") or (not wants_long and live_side == "short")
+        if live_side and position_matches:
             return None
         return "entry rule: low conviction blocked"
     return None
@@ -1438,6 +1442,7 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
     conviction_block = _get_entry_conviction_block_reason(
         paper_trade, event,
         risk_profile=getattr(config, "risk_profile", None),
+        live_side=live_side,
     )
     if conviction_block:
         side_hint = "buy" if (event == "open" and not direct_short) else "sell"

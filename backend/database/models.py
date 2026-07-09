@@ -419,6 +419,8 @@ class AppConfig(Base):
     alpaca_limit_slippage_pct     = Column(Float,       nullable=False, default=0.002)
     alpaca_daily_loss_limit_usd   = Column(Float,       nullable=True,  default=None)
     alpaca_max_consecutive_losses = Column(Integer,     nullable=True,  default=3)
+    circuit_breaker_fired_at      = Column(DateTime(timezone=True), nullable=True, default=None)
+    circuit_breaker_reason        = Column(String(255), nullable=True,  default=None)
 
     last_analysis_started_at = Column(DateTime(timezone=True), nullable=True)
     last_analysis_completed_at = Column(DateTime(timezone=True), nullable=True)

@@ -1,3 +1,105 @@
+# Release Notes — July 9, 2026
+
+## Fix: Circuit Breaker — Three Bugs Fixed + Persistent Reason UI Indicator
+
+### Bugs Fixed
+
+**1. Paper trading losses were disabling live trading**
+
+The paper-mode branches inside `_check_circuit_breakers` (max exposure and consecutive-loss checks) called `_disable_live_trading`, permanently setting `alpaca_execution_mode = "off"` even when the system was running in paper mode. Paper losses must never affect live trading state. Fixed: paper-mode branches now only raise `CircuitBreakerError` to block the paper order without touching live trading config.
+
+**2. Live consecutive-loss check never fired**
+
+`_get_alpaca_live_recent_pnls` set `_cutoff = datetime.now(timezone.utc)` and then filtered `filled_at >= cutoff`, which selects fills in the future — always returning zero rows. The live consecutive-loss circuit breaker therefore never triggered. Fixed: cutoff is now `now - 30 days`.
+
+**3. Circuit breaker status endpoint always returned `fired: false`**
+
+`GET /api/alpaca/circuit-breaker/status` checked `is_disabled AND execution_mode == "live"`, but `_disable_live_trading` sets mode to `"off"`, so this condition was never true. The UI banner was therefore never shown. Fixed: detection now uses `circuit_breaker_fired_at IS NOT NULL` as the authoritative signal.
+
+### New: Persistent Reason + UI Indicator
+
+- `_disable_live_trading` now saves `circuit_breaker_fired_at` (timestamp) and `circuit_breaker_reason` (text) to the DB.
+- `/api/alpaca/circuit-breaker/status` returns both fields.
+- The amber "Circuit Breaker Active" banner on `/trading` now shows the exact trigger (e.g., *"daily loss limit $200 hit (P&L $-212.50)"*) instead of a generic message.
+- Re-enabling live trading (button or `/live on`) clears both fields.
+
+**Schema changes:** Two new nullable columns added to `app_config` — `circuit_breaker_fired_at` (TIMESTAMP) and `circuit_breaker_reason` (VARCHAR 255). Migration is automatic on startup.
+
+---
+
+# Release Notes — July 6, 2026
+
+## Feature: Telegram `/live on` / `/live off` Commands
+
+Added two new Telegram bot commands to toggle Alpaca live trading without touching the Admin UI.
+
+- `/live on` — sets `alpaca_execution_mode = "live"` and `alpaca_live_trading_enabled = True`. Sends a ⚠️ confirmation message.
+- `/live off` — disables live trading and reverts to `alpaca_execution_mode = "paper"`. Sends a ✅ confirmation message.
+- `/help` updated to list both commands.
+- Same security model as all other commands: only the configured authorized private Telegram chat is accepted.
+
+**Config Changes:** none (uses existing `alpaca_execution_mode` and `alpaca_live_trading_enabled` fields).
+
+---
+
+## Fix: Alpaca Accumulation Now Executes for LOW Conviction When Position Already Exists
+
+When a BUY signal re-confirmed an open NVDA position at LOW conviction, the paper trade correctly accumulated shares, but the Alpaca broker skipped the order with "entry rule: low conviction blocked." The conviction gate was designed to block fresh entries at LOW conviction, but it was also blocking accumulation adds on existing positions.
+
+**Root cause (`alpaca_broker.py` — `_get_entry_conviction_block_reason`):**
+
+- The LOW conviction check was applied unconditionally to all `open` events
+- Accumulation sends an `open` event with the new signal's conviction level
+- A matching live position on the same side was not consulted
+
+**Fix:**
+
+- Pass the already-computed `live_side` into `_get_entry_conviction_block_reason`
+- If there is an existing live position on the same side as the signal, LOW conviction accumulation is allowed through
+- Fresh LOW conviction entries (no existing live position) are still blocked as before
+
+**Config Changes:** none.
+
+---
+
+## Fix: Trading Page Paper Section Now Collapses When Alpaca Live Track Is Selected
+
+The collapsible "Paper Trading" expander on `/trading` was gated on `alpacaLiveEnabled` (live execution actively armed) in addition to the Alpaca Live track being selected. Users with live credentials configured but execution not armed could not see the collapsible. Changed the condition to `preferredTrack === "alpaca_live"` so the paper section collapses as soon as the Alpaca Live track is chosen.
+
+**Config Changes:** none (frontend-only).
+
+---
+
+## Feature: Alpaca Order Log Now Shows "Filled At" Timestamp
+
+Added a "Filled" column to the Alpaca Order Log table on `/trading` showing when each order was actually filled. Unfilled/skipped/error orders show "—".
+
+**Config Changes:** none (frontend-only).
+
+---
+
+# Release Notes — July 5, 2026
+
+## Fix: Daily Loss Limit Now Applies to Real Money Trades Only
+
+The $150 daily loss limit (configurable via `alpaca_daily_loss_limit_usd`) was incorrectly checking paper trading P&L in addition to live account P&L. Paper trade losses could accumulate and trigger the circuit breaker, disabling live trading even though the user had never lost $150 in real money.
+
+**Root cause (`alpaca_broker.py` — `_check_circuit_breakers`):**
+
+- The daily loss limit check had two branches: live (Alpaca API) and paper (DB query)
+- The paper branch summed `PaperTrade.realized_pnl` since midnight ET and could fire the breaker
+- When triggered, `_disable_live_trading()` set `alpaca_execution_mode = "off"` and `alpaca_live_trading_enabled = False`
+
+**Fix:**
+
+- Removed the paper trading branch from the daily loss limit check
+- The daily loss limit now only checks Alpaca live account P&L via `_get_alpaca_live_daily_pnl()`
+- Paper trading losses are completely invisible to the circuit breaker
+
+**Config Changes:** none (uses existing `alpaca_daily_loss_limit_usd` from Admin UI).
+
+---
+
 # Release Notes — June 24, 2026
 
 ## Fix: Stop-Loss / Take-Profit Now Checked Regardless of Signal Direction
