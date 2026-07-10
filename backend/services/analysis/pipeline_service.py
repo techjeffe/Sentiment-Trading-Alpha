@@ -395,6 +395,8 @@ class PipelineService:
                     )
 
                     # Per-symbol logging
+                    _stage1_trace = (sentiment_trace or {}).get("stage1", {})
+                    _kw_attr_by_sym = _stage1_trace.get("keyword_attribution_by_symbol", {})
                     for sym, result in (sentiment_results or {}).items():
                         raw_scores = {
                             "bluster": result.get("bluster_score"),
@@ -403,10 +405,12 @@ class PipelineService:
                             "directional": result.get("directional_score"),
                         }
                         signal_dict = consensus_signal.model_dump(mode="json") if consensus_signal else {}
+                        parsed_payload = result.get("parsed_payload") or {}
                         dl.log_symbol_scores(
                             ddb,
                             run_id=self.request_id,
                             symbol=sym,
+                            blue_team_output=parsed_payload,
                             raw_scores=raw_scores,
                             final_signal={
                                 "type": signal_dict.get("signal_type"),
@@ -425,6 +429,8 @@ class PipelineService:
                                 "reason": stage_metrics.get("materiality", {}).get("gate_reason"),
                                 "rolling_baseline": stage_metrics.get("materiality", {}).get("rolling_baseline"),
                             },
+                            event_type=str(parsed_payload.get("event_type") or "").strip() or None,
+                            keyword_attribution=_kw_attr_by_sym.get(sym),
                         )
                     ddb.commit()
                 except Exception as dl_exc:

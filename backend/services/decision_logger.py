@@ -120,6 +120,8 @@ class DecisionLogger:
         entry_threshold_used: Optional[float] = None,
         materiality_info: Optional[Dict[str, Any]] = None,
         red_team_info: Optional[Dict[str, Any]] = None,
+        event_type: Optional[str] = None,
+        keyword_attribution: Optional[Dict[str, Any]] = None,
     ) -> int:
         """Record per-symbol scores and return the symbol_log_id."""
         row = DecisionLogSymbol(
@@ -160,6 +162,8 @@ class DecisionLogger:
             red_team_disagreed=1 if (red_team_info or {}).get("disagreed") else 0,
             red_team_confidence_delta=red_team_info.get("confidence_delta") if red_team_info else None,
             red_team_override_resolved_to=red_team_info.get("resolved_to") if red_team_info else None,
+            event_type=event_type,
+            keyword_attribution=keyword_attribution,
         )
         db.add(row)
         db.flush()

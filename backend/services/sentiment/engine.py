@@ -1229,11 +1229,44 @@ class SentimentEngine:
         )
         print(f"Stage 1 per-symbol pools: {per_sym_summary}")
 
+        # Build keyword attribution: term hit counts + source breakdown per symbol.
+        keyword_attribution_by_symbol: Dict[str, Dict[str, Any]] = {}
+        for sym, terms in proxy_terms_by_symbol.items():
+            sym_posts = posts_by_symbol.get(sym, [])
+            sym_expanded = expand_proxy_terms_for_matching(terms)
+            term_counts: Dict[str, int] = {}
+            source_counts: Dict[str, int] = {}
+            for post in sym_posts:
+                blob = normalize_text_for_matching(
+                    " ".join([
+                        str(getattr(post, "title", "") or ""),
+                        str(getattr(post, "summary", "") or ""),
+                        str(getattr(post, "content", "") or ""),
+                        " ".join(getattr(post, "keywords", None) or []),
+                    ])
+                )
+                for t in sym_expanded:
+                    if t in blob:
+                        term_counts[t] = term_counts.get(t, 0) + 1
+                src = str(
+                    getattr(post, "source", None)
+                    or getattr(post, "feed_name", None)
+                    or "unknown"
+                )
+                source_counts[src] = source_counts.get(src, 0) + 1
+            top_terms = sorted(term_counts.items(), key=lambda x: -x[1])[:10]
+            keyword_attribution_by_symbol[sym] = {
+                "total_articles": len(sym_posts),
+                "top_terms": [{"term": t, "count": c} for t, c in top_terms],
+                "source_breakdown": source_counts,
+            }
+
         return {
             "filtered_posts": filtered,
             "posts_by_symbol": posts_by_symbol,
             "proxy_terms_by_symbol": proxy_terms_by_symbol,
             "exposure_hints_by_symbol": exposure_hints_by_symbol,
+            "keyword_attribution_by_symbol": keyword_attribution_by_symbol,
             "keyword_generation_trace_by_symbol": {
                 sym: dict(_keyword_trace_cache.get(sym.upper(), {}))
                 for sym in symbols

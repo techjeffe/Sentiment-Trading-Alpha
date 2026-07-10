@@ -121,6 +121,7 @@ class SentimentService:
             proxy_terms_by_symbol = stage1_result["proxy_terms_by_symbol"]
             exposure_hints_by_symbol = stage1_result.get("exposure_hints_by_symbol", {})
             keyword_generation_trace_by_symbol = stage1_result.get("keyword_generation_trace_by_symbol", {}) or {}
+            keyword_attribution_by_symbol: Dict[str, Any] = stage1_result.get("keyword_attribution_by_symbol", {}) or {}
             stage_metrics["stage1"] = {
                 "status": "completed",
                 "model_name": stage1_model,
@@ -134,6 +135,7 @@ class SentimentService:
             analysis_posts = posts
             proxy_terms_by_symbol = {s: [] for s in symbols}
             keyword_generation_trace_by_symbol = {}
+            keyword_attribution_by_symbol: Dict[str, Any] = {}
             stage_metrics["stage1"] = {
                 "status": "skipped",
                 "model_name": "",
@@ -340,6 +342,7 @@ class SentimentService:
             "stage1": {
                 **self._build_stage1_trace(posts, analysis_posts, proxy_terms_by_symbol),
                 "keyword_generation_trace_by_symbol": keyword_generation_trace_by_symbol,
+                "keyword_attribution_by_symbol": keyword_attribution_by_symbol,
             },
             "stage2_runs_by_symbol": stage2_runs_by_symbol,
         }
