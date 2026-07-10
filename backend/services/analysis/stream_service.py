@@ -262,6 +262,7 @@ class StreamService:
         red_team_debug = None
         red_team_enabled = bool(getattr(config, 'red_team_enabled', True))
         if red_team_enabled:
+            print(f"[red-team] stage starting — {len(symbols)} symbol(s), model={pipeline.model_name}")
             yield f": {json.dumps({'type': 'stage-start', 'stage': 4})}\n\n"
             try:
                 context = self._signal.build_red_team_context(
@@ -284,10 +285,13 @@ class StreamService:
                     )
                     red_team_review.signal_changes = signal_changes
             except Exception as e:
+                print(f"[red-team] stage FAILED: {e}")
                 yield f": {json.dumps({'type': 'error', 'stage': 'red_team', 'detail': str(e)})}\n\n"
             yield self._sse_result("red_team", "completed", {
                 "status": "ok" if red_team_review else "not_applied",
             })
+        else:
+            print("[red-team] stage skipped — red_team_enabled=False in config")
 
         # Backtest
         yield f": {json.dumps({'type': 'stage-start', 'stage': 5})}\n\n"

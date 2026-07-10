@@ -812,45 +812,33 @@ def _has_conflicting_live_position(
     execution_ticker: str,
     signal_type: str,
 ) -> Optional[Dict[str, Any]]:
-    """Check if there's a conflicting live position for the same underlying.
+    """Check if there's a conflicting live position for the same underlying family.
 
     Returns the conflicting position dict if found, None otherwise.
     A conflict exists when:
-    - The execution ticker itself is a conflicting position (same underlying, opposite direction)
-    - The signal is SHORT but there's a LONG position in the same underlying's bull ETF
-    - The signal is LONG but there's a SHORT position in the same underlying's bear ETF
+    - The execution ticker itself is a conflicting position (same underlying family, opposite direction)
+    - The signal is SHORT but there's a LONG position in the same family's bull ETF
+    - The signal is LONG but there's a SHORT position in the same family's bear ETF
+
+    Family resolution includes both leveraged instrument buckets (INSTRUMENT_SPECS,
+    e.g. TQQQ/SQQQ for QQQ) and sector/stock hedge ETFs (HEDGE_ETF_FAMILY, e.g.
+    PSQ), so a hedge ETF bought against a stock signal (e.g. PSQ for a NVDA
+    short) is still recognized as opposing a QQQ-family long (e.g. TQQQ).
     """
-    from services.trading_instruments import INSTRUMENT_SPECS
+    from services.trading_instruments import build_ticker_bucket_map
 
     ticker = str(execution_ticker or "").upper().strip()
-    stype = str(signal_type or "").upper()
+    bucket_map = build_ticker_bucket_map()
 
-    # Find which underlying this ticker belongs to
-    underlying = None
-    ticker_bucket = None  # "bull" or "bear"
-    for _under, _spec in INSTRUMENT_SPECS.items():
-        _under = _under.upper()
-        for _bucket, _tickers in _spec.get("bull", {}).items():
-            if str(_tickers).upper() == ticker:
-                underlying = _under
-                ticker_bucket = "bull"
-                break
-        if underlying:
-            break
-        for _bucket, _tickers in _spec.get("bear", {}).items():
-            if str(_tickers).upper() == ticker:
-                underlying = _under
-                ticker_bucket = "bear"
-                break
-        if underlying:
-            break
-
-    if not underlying:
+    info = bucket_map.get(ticker)
+    if not info:
         # Not a known instrument — check if the ticker itself is open
         live_pos = _get_live_symbol_position(broker, ticker)
         if live_pos and live_pos.get("qty", 0) > 0:
             return live_pos
         return None
+
+    underlying, ticker_bucket = info
 
     # Get all live positions
     all_positions = _get_all_live_positions(broker)
@@ -861,32 +849,13 @@ def _has_conflicting_live_position(
         if pos_ticker == ticker:
             continue  # Skip the position we're about to open
 
-        # Find which underlying this position belongs to
-        pos_underlying = None
-        pos_bucket = None
-        for _under, _spec in INSTRUMENT_SPECS.items():
-            _under = _under.upper()
-            for _bucket, _tickers in _spec.get("bull", {}).items():
-                if str(_tickers).upper() == pos_ticker:
-                    pos_underlying = _under
-                    pos_bucket = "bull"
-                    break
-            if pos_underlying:
-                break
-            for _bucket, _tickers in _spec.get("bear", {}).items():
-                if str(_tickers).upper() == pos_ticker:
-                    pos_underlying = _under
-                    pos_bucket = "bear"
-                    break
-            if pos_underlying:
-                break
+        pos_info = bucket_map.get(pos_ticker)
+        if not pos_info or pos_info[0] != underlying:
+            continue  # Different (or unknown) family — no conflict
 
-        if pos_underlying != underlying:
-            continue  # Different underlying — no conflict
-
-        # Same underlying — check for opposing direction
-        if ticker_bucket and pos_bucket and ticker_bucket != pos_bucket:
-            return pos  # Opposing bull/bear for same underlying
+        # Same family — check for opposing direction
+        if pos_info[1] != ticker_bucket:
+            return pos  # Opposing bull/bear for same underlying family
 
     return None
 

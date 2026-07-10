@@ -98,7 +98,7 @@ def _resolve_underlying_conflicts(
     positions from accumulating across weekend/overnight runs.
     """
     from database.models import PaperTrade
-    from services.trading_instruments import INSTRUMENT_SPECS
+    from services.trading_instruments import build_ticker_bucket_map
 
     open_positions = (
         db.query(PaperTrade)
@@ -107,21 +107,29 @@ def _resolve_underlying_conflicts(
         .all()
     )
 
-    # Group by underlying
+    # ── Build bucket lookup: execution_ticker → (family underlying, direction bucket) ──
+    # Includes both leveraged instrument buckets (INSTRUMENT_SPECS) and sector/
+    # stock hedge ETFs (HEDGE_ETF_FAMILY, e.g. PSQ), so a hedge ETF opened
+    # against a stock's `underlying` (e.g. PSQ opened for underlying=NVDA)
+    # still groups with other positions on the same index family (e.g. TQQQ,
+    # underlying=QQQ) for conflict detection.
+    _ticker_to_bucket = build_ticker_bucket_map()
+
+    def _conflict_group_key(pos) -> str:
+        tick = str(getattr(pos, "execution_ticker", "") or "").upper()
+        info = _ticker_to_bucket.get(tick)
+        if info:
+            return info[0]
+        return str(getattr(pos, "underlying", "") or "").upper().strip()
+
+    # Group by resolved family (falls back to the raw `underlying` field for
+    # tickers that aren't a known leveraged/hedge instrument).
     by_underlying: Dict[str, List] = {}
     for pos in open_positions:
-        key = str(getattr(pos, "underlying", "") or "").upper().strip()
+        key = _conflict_group_key(pos)
         if not key:
             continue
         by_underlying.setdefault(key, []).append(pos)
-
-    # ── Build bucket lookup: execution_ticker → (underlying, direction bucket) ──
-    _ticker_to_bucket: Dict[str, tuple[str, str]] = {}
-    for underlying, spec in INSTRUMENT_SPECS.items():
-        for bucket, tickers in spec.get("bull", {}).items():
-            _ticker_to_bucket[str(tickers).upper()] = (underlying.upper(), "bull")
-        for bucket, tickers in spec.get("bear", {}).items():
-            _ticker_to_bucket[str(tickers).upper()] = (underlying.upper(), "bear")
 
     def _positions_oppose(a, b) -> bool:
         """Return True if positions a and b are opposing market bets."""

@@ -716,6 +716,7 @@ async def rerun_analysis_snapshot(
         trading_signal = blue_team_signal
         if bool(getattr(config, "red_team_enabled", True)):
             red_team_started = time.time()
+            print(f"[red-team] stage starting — {len(symbols)} symbol(s), model={rerun_reasoning or effective_model}")
             red_team_context = signal_service.build_red_team_context(
                 symbols=symbols,
                 posts=posts,
@@ -749,6 +750,7 @@ async def rerun_analysis_snapshot(
                 reviewed_symbols=len(symbols),
             )
         else:
+            print("[red-team] stage skipped — red_team_enabled=False in config")
             stage_metrics["red_team"] = _stage_metric(
                 status="skipped",
                 model_name=rerun_reasoning or effective_model,

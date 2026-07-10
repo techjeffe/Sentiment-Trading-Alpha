@@ -36,6 +36,34 @@ INSTRUMENT_SPECS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# Sector/stock hedge ETFs (see alpaca_broker.INVERSE_ETF_MAP) that don't appear
+# in INSTRUMENT_SPECS but still express a directional bet on an index family.
+# Maps execution ticker -> (family underlying, "bull"/"bear") so conflict
+# detection recognizes e.g. PSQ (short Nasdaq-100) as opposing TQQQ (long
+# Nasdaq-100), even though PSQ gets opened against a stock's `underlying`
+# (e.g. NVDA) rather than QQQ. SQQQ and SPXS are already covered via
+# INSTRUMENT_SPECS bear buckets above and are intentionally omitted here.
+HEDGE_ETF_FAMILY: Dict[str, tuple] = {
+    "PSQ": ("QQQ", "bear"),
+    "BITI": ("BITO", "bear"),
+    "RWM": ("IWM", "bear"),
+}
+
+
+def build_ticker_bucket_map() -> Dict[str, tuple]:
+    """Merge INSTRUMENT_SPECS leveraged buckets with HEDGE_ETF_FAMILY hedge
+    ETFs into a single execution_ticker -> (family_underlying, bucket) map."""
+    bucket_map: Dict[str, tuple] = {}
+    for underlying, spec in INSTRUMENT_SPECS.items():
+        for tickers in spec.get("bull", {}).values():
+            bucket_map[str(tickers).upper()] = (underlying.upper(), "bull")
+        for tickers in spec.get("bear", {}).values():
+            bucket_map[str(tickers).upper()] = (underlying.upper(), "bear")
+    for ticker, (family, direction) in HEDGE_ETF_FAMILY.items():
+        bucket_map.setdefault(ticker.upper(), (family.upper(), direction))
+    return bucket_map
+
+
 def normalize_requested_leverage(label: str) -> int:
     normalized = str(label or "1x").strip().lower().replace("x", "")
     try:

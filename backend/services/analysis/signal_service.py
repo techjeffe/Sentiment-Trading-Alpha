@@ -482,7 +482,10 @@ class SignalService:
     ) -> TradingSignal:
         """Combine the blue-team signal with the red-team review."""
         if not red_team_review or not red_team_review.symbol_reviews:
+            print("[red-team] no review to apply — keeping blue-team signal unchanged")
             return blue_team_signal
+
+        print(f"[red-team] applying review: {len(red_team_review.symbol_reviews)} symbol(s) reviewed")
 
         recommendations: List[Dict[str, str]] = []
         urgency_rank = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
@@ -713,14 +716,19 @@ class SignalService:
         """Run the red-team review against an Ollama model."""
         from services.sentiment.prompts import format_red_team_review_prompt
 
+        print(f"[red-team] starting review — model={model_name}")
         prompt = format_red_team_review_prompt(context.get("raw_context", ""))
         engine = SentimentEngine(model_name=model_name)
-        raw = engine._call_ollama_sync(prompt, model_override=model_name, force_json=True, max_tokens=700)
-        raw_text = engine._strip_thinking(raw.get("response", ""))
-        payload = engine._extract_json_value(raw_text)
-        if not isinstance(payload, dict):
-            raise ValueError("Red-team review returned non-object JSON")
-        review = RedTeamReview.model_validate(payload)
+        try:
+            raw = engine._call_ollama_sync(prompt, model_override=model_name, force_json=True, max_tokens=700)
+            raw_text = engine._strip_thinking(raw.get("response", ""))
+            payload = engine._extract_json_value(raw_text)
+            if not isinstance(payload, dict):
+                raise ValueError("Red-team review returned non-object JSON")
+            review = RedTeamReview.model_validate(payload)
+        except Exception as exc:
+            print(f"[red-team] review FAILED — model={model_name}: {exc}")
+            raise
         debug = RedTeamDebug(
             context=context,
             prompt=prompt,
@@ -728,6 +736,7 @@ class SignalService:
             parsed_payload=payload,
             signal_changes=[],
         )
+        print(f"[red-team] review completed — {len(review.symbol_reviews or [])} symbol(s) reviewed")
         return review, debug
 
     def ensure_execution_quotes(
