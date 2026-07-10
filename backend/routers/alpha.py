@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from database.engine import get_db, get_decision_log_db
 
-router = APIRouter(prefix="/api/v1/alpha", tags=["alpha"])
+router = APIRouter(prefix="/alpha", tags=["alpha"])
 
 _VALID_HORIZONS = {"4h", "1d", "3d", "1w"}
 

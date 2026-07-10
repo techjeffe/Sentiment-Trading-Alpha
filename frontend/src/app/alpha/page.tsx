@@ -98,8 +98,8 @@ export default function AlphaPage() {
       const sym = symbolFilter.trim().toUpperCase() || undefined;
       const symQ = sym ? `&symbol=${sym}` : "";
       const [icRes, attrRes] = await Promise.all([
-        fetch(`/api/v1/alpha/ic?horizons=4h,1d,3d,1w&window=${window_}${symQ}`),
-        fetch(`/api/v1/alpha/attribution?limit=200${symQ}`),
+        fetch(`/api/alpha/ic?horizons=4h,1d,3d,1w&window=${window_}${symQ}`),
+        fetch(`/api/alpha/attribution?limit=200${symQ}`),
       ]);
       const [ic, attr] = await Promise.all([icRes.json(), attrRes.json()]);
       setIcData(ic);
@@ -115,7 +115,7 @@ export default function AlphaPage() {
     setLoading(true);
     try {
       const sym = symbolFilter.trim().toUpperCase() || null;
-      const res = await fetch("/api/v1/alpha/perturbation", {
+      const res = await fetch("/api/alpha/perturbation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ nudge_pct: nudgePct / 100, symbol: sym, horizons: ["4h", "1d", "3d", "1w"] }),
