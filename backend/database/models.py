@@ -604,6 +604,8 @@ class DecisionLogSymbol(DecisionLogBase):
     red_team_disagreed = Column(Integer, nullable=True)
     red_team_confidence_delta = Column(Float, nullable=True)
     red_team_override_resolved_to = Column(String(16), nullable=True)
+    event_type = Column(String(32), nullable=True)          # promoted from blue_team JSON for fast querying
+    keyword_attribution = Column(JSON, nullable=True)       # Stage 1 term hit counts + source breakdown
 
     __table_args__ = (
         Index("ix_dl_symbol_run_sym", "run_id", "symbol"),

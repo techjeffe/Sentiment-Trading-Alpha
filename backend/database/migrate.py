@@ -381,9 +381,25 @@ def migrate():
 
     # ── Decision Log tables ──────────────────────────────────────────────
     # Created via metadata.create_all on the decision_log engine during
-    # backend startup.  No manual migration steps needed — the tables are
-    # managed by the DecisionLogBase declarative base and are created
-    # automatically when the backend starts (see decision_logger.py).
+    # backend startup.  Column additions still need explicit ALTER TABLE
+    # because create_all is a no-op on existing tables.
+    try:
+        from database.engine import DECISION_LOG_PATH
+        dl_engine = create_engine(f"sqlite:///{DECISION_LOG_PATH.as_posix()}", connect_args={"check_same_thread": False})
+        with dl_engine.connect() as dl_conn:
+            dl_tables = [row[0] for row in dl_conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()]
+            if "decision_log_symbol" in dl_tables:
+                dl_sym_cols = [row[1] for row in dl_conn.execute(text("PRAGMA table_info(decision_log_symbol)")).fetchall()]
+                for col_name, col_type in [
+                    ("event_type", "VARCHAR(32)"),
+                    ("keyword_attribution", "JSON"),
+                ]:
+                    if col_name not in dl_sym_cols:
+                        print(f"Adding {col_name} to decision_log_symbol...")
+                        dl_conn.exec_driver_sql(f"ALTER TABLE decision_log_symbol ADD COLUMN {col_name} {col_type}")
+                        dl_conn.commit()
+    except Exception as dl_exc:
+        print(f"Decision log migration warning: {dl_exc}")
 
 
 if __name__ == "__main__":

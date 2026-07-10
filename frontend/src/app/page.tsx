@@ -718,6 +718,15 @@ export default function Home() {
                     >
                         {advancedMode ? "Adv" : "Std"}
                     </button>
+                    {advancedMode && (
+                        <Link
+                            href="/alpha"
+                            className="rounded-lg py-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors text-violet-400 hover:text-violet-200 hover:bg-violet-900/30 border border-violet-500/30"
+                            title="Alpha Analytics — IC, attribution, perturbation testing"
+                        >
+                            α Alpha
+                        </Link>
+                    )}
                 </nav>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
