@@ -397,6 +397,14 @@ class PipelineService:
                     # Per-symbol logging
                     _stage1_trace = (sentiment_trace or {}).get("stage1", {})
                     _kw_attr_by_sym = _stage1_trace.get("keyword_attribution_by_symbol", {})
+                    try:
+                        from services.paper_trading import _entry_threshold_for_session, market_status
+                        _entry_threshold_used = _entry_threshold_for_session(
+                            market_status(getattr(config, "allow_extended_hours_trading", True))["status"],
+                            config,
+                        )
+                    except Exception:
+                        _entry_threshold_used = None
                     for sym, result in (sentiment_results or {}).items():
                         raw_scores = {
                             "bluster": result.get("bluster_score"),
@@ -422,7 +430,7 @@ class PipelineService:
                                 "take_profit_pct": signal_dict.get("take_profit_pct"),
                                 "data_gap_hold": signal_dict.get("data_gap_hold"),
                             },
-                            entry_threshold_used=stage_metrics.get("entry_threshold"),
+                            entry_threshold_used=_entry_threshold_used,
                             materiality_info={
                                 "checked": stage_metrics.get("materiality", {}).get("gate_checked", False),
                                 "blocked": stage_metrics.get("materiality", {}).get("gate_blocked", False),
