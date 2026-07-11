@@ -1940,6 +1940,7 @@ def reconcile_on_startup(db) -> None:
             AlpacaOrder.filled_at.is_(None),
             AlpacaOrder.status.notin_(list(_TERMINAL_STATUSES)),
             AlpacaOrder.side == "buy",
+            AlpacaOrder.alpaca_order_id.isnot(None),
         )
         .all()
     )

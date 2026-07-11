@@ -1109,8 +1109,12 @@ async def _pre_ingest_stream(
     configured_count = len(merged_feeds)
     yahoo_count = len(yahoo_symbols)
 
-    yield f"data: {json.dumps({'type': 'log', 'message': f'Loading {feed_count} feeds ({configured_count} configured RSS + {yahoo_count} Yahoo Finance symbols)...'}, default=str)}\n\n"
-    yield f"data: {json.dumps({'type': 'phase', 'phase': 0, 'label': 'Pulling RSS feeds and market context'}, default=str)}\n\n"
+    _msg = f'Loading {feed_count} feeds ({configured_count} configured RSS + {yahoo_count} Yahoo Finance symbols)...'
+    print(f"[stream] {_msg}")
+    yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
+    _msg = 'Pulling RSS feeds and market context'
+    print(f"[stream] Phase 0/4: {_msg}")
+    yield f"data: {json.dumps({'type': 'phase', 'phase': 0, 'label': _msg}, default=str)}\n\n"
 
     # 2. Parse feeds
     articles = []
@@ -1128,20 +1132,28 @@ async def _pre_ingest_stream(
             yahoo_articles = await _asyncio.to_thread(parser.fetch_yahoo_finance_news, yahoo_symbols)
             articles.extend(yahoo_articles)
 
-        yield f"data: {json.dumps({'type': 'log', 'message': f'Fetched {len(articles)} raw articles ({len(rss_articles)} RSS + {len(yahoo_articles) if yahoo_symbols else 0} Yahoo Finance)'}, default=str)}\n\n"
+        _msg = f'Fetched {len(articles)} raw articles ({len(rss_articles)} RSS + {len(yahoo_articles) if yahoo_symbols else 0} Yahoo Finance)'
+        print(f"[stream] {_msg}")
+        yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
         for article in articles:
             source = str(getattr(article, "source", "") or "Unknown").strip() or "Unknown"
             title = str(getattr(article, "title", "") or "").strip()
             summary = str(getattr(article, "summary", "") or getattr(article, "content", "") or "").strip()
             keywords = list(getattr(article, "keywords", None) or [])
+            _art_msg = f"  [{source}] {title}"
+            print(f"[stream] {_art_msg}")
             yield f"data: {json.dumps({'type': 'article', 'source': source, 'title': title, 'description': summary[:500], 'keywords': keywords}, default=str)}\n\n"
     except Exception as exc:
-        yield f"data: {json.dumps({'type': 'log', 'message': f'Feed parse error: {exc}'}, default=str)}\n\n"
+        _msg = f'Feed parse error: {exc}'
+        print(f"[stream] {_msg}")
+        yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
         articles = []
         return
 
     if not articles:
-        yield f"data: {json.dumps({'type': 'log', 'message': '⚠ No articles fetched from RSS feeds — pipeline will use snapshot fallback'}, default=str)}\n\n"
+        _msg = '⚠ No articles fetched from RSS feeds — pipeline will use snapshot fallback'
+        print(f"[stream] {_msg}")
+        yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
 
     # 3. Stage 0 filter with verbose per-article output
     from services.data_ingestion.worker import (
@@ -1185,14 +1197,18 @@ async def _pre_ingest_stream(
         else:
             filtered_out += 1
 
-    yield f"data: {json.dumps({'type': 'log', 'message': f'Stage 0 filter: {len(kept)}/{len(articles)} articles passed ({filtered_out} filtered out)'}, default=str)}\n\n"
+    _msg = f'Stage 0 filter: {len(kept)}/{len(articles)} articles passed ({filtered_out} filtered out)'
+    print(f"[stream] {_msg}")
+    yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
 
     # Show matched relevance terms per symbol
     all_terms = expand_proxy_terms_for_matching(
         [t for terms in symbol_relevance.values() for t in terms]
         + ["federal reserve", "fed", "rate cut", "rate hike", "fomc", "cpi", "inflation", "jobs report", "payrolls", "tariff", "trade war", "sanctions", "opec", "export controls", "emergency order"]
     )
-    yield f"data: {json.dumps({'type': 'log', 'message': f'Stage 0 terms: {len(all_terms)} relevance+policy terms active'}, default=str)}\n\n"
+    _msg = f'Stage 0 terms: {len(all_terms)} relevance+policy terms active'
+    print(f"[stream] {_msg}")
+    yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
 
     # Store articles in DB queue (upsert, bypass duplicates silently)
     stored = 0
@@ -1227,11 +1243,15 @@ async def _pre_ingest_stream(
             fast_lane_ids.append(int(row.id))
             fast_lane_syms.extend(_resolve_fast_lane_symbols(summary_blob, tracked_symbols))
 
-    yield f"data: {json.dumps({'type': 'log', 'message': f'Queue updated: {stored} new + {dupes} duplicates stored'}, default=str)}\n\n"
+    _msg = f'Queue updated: {stored} new + {dupes} duplicates stored'
+    print(f"[stream] {_msg}")
+    yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
 
     # Pending count
     pending = session.query(ScrapedArticle).filter(ScrapedArticle.processed.is_(False)).count()
-    yield f"data: {json.dumps({'type': 'log', 'message': f'DB queue: {pending} unprocessed articles ready for analysis'}, default=str)}\n\n"
+    _msg = f'DB queue: {pending} unprocessed articles ready for analysis'
+    print(f"[stream] {_msg}")
+    yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
 
 
 @router.post(
@@ -1288,12 +1308,18 @@ async def analyze_market_stream(
                 )
             else:
                 log_message = f"Ollama reachable — runtime: {runtime_model}"
-
+            print(f"[stream] {log_message}")
             yield f"data: {json.dumps({'type': 'log', 'message': log_message}, default=str)}\n\n"
             symbols_label = ", ".join(effective_request.symbols)
-            yield f"data: {json.dumps({'type': 'log', 'message': f'Fetching real-time price data for {symbols_label}...'}, default=str)}\n\n"
-            yield f"data: {json.dumps({'type': 'log', 'message': 'Phase 0/4: Pulling RSS feeds and market context...'}, default=str)}\n\n"
-            yield f"data: {json.dumps({'type': 'phase', 'phase': 0, 'label': 'Pulling RSS feeds and market context'}, default=str)}\n\n"
+            _msg = f'Fetching real-time price data for {symbols_label}...'
+            print(f"[stream] {_msg}")
+            yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
+            _msg = 'Phase 0/4: Pulling RSS feeds and market context...'
+            print(f"[stream] {_msg}")
+            yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
+            _msg = 'Pulling RSS feeds and market context'
+            print(f"[stream] Phase 0/4: {_msg}")
+            yield f"data: {json.dumps({'type': 'phase', 'phase': 0, 'label': _msg}, default=str)}\n\n"
 
             # Pre-analysis RSS ingestion — ensures we always have fresh articles even after DB reset
             ingestion_result: Dict[str, Any] = {}
@@ -1302,8 +1328,12 @@ async def analyze_market_stream(
                     yield chunk
             except Exception:
                 pass
-            yield f"data: {json.dumps({'type': 'log', 'message': 'Phase 1/4: Ingesting queued articles and market context...'}, default=str)}\n\n"
-            yield f"data: {json.dumps({'type': 'phase', 'phase': 1, 'label': 'Ingesting queued articles and market context'}, default=str)}\n\n"
+            _msg = 'Phase 1/4: Ingesting queued articles and market context...'
+            print(f"[stream] {_msg}")
+            yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
+            _label = 'Ingesting queued articles and market context'
+            print(f"[stream] Phase 1/4: {_label}")
+            yield f"data: {json.dumps({'type': 'phase', 'phase': 1, 'label': _label}, default=str)}\n\n"
 
             # Always load all unprocessed articles from the DB queue rather than
             # restricting to only newly ingested ones. The pre-ingest step above
@@ -1311,7 +1341,9 @@ async def analyze_market_stream(
             # of what the background scheduler already stored. Restricting to only
             # new article IDs starves the pipeline (e.g. 1 new article when 194 are
             # available), causing all symbols to analyze the same article.
-            yield f"data: {json.dumps({'type': 'log', 'message': 'Loading all unprocessed articles from DB queue for analysis'}, default=str)}\n\n"
+            _msg = 'Loading all unprocessed articles from DB queue for analysis'
+            print(f"[stream] {_msg}")
+            yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
 
             task = asyncio.create_task(
                 pipeline.run(
@@ -1337,6 +1369,7 @@ async def analyze_market_stream(
                     except Exception:
                         pass
                     timeout_msg = f"Analysis timed out after {timeout_seconds}s"
+                    print(f"[stream] {timeout_msg}")
                     yield f"data: {json.dumps({'type': 'log', 'message': timeout_msg}, default=str)}\n\n"
                     yield f"data: {json.dumps({'type': 'error', 'message': timeout_msg})}\n\n"
                     return
@@ -1345,26 +1378,42 @@ async def analyze_market_stream(
                 if not done:
                     heartbeat_count += 1
                     if heartbeat_count == 1:
-                        yield f"data: {json.dumps({'type': 'log', 'message': 'Phase 2/4: Running symbol specialists...'}, default=str)}\n\n"
-                        yield f"data: {json.dumps({'type': 'phase', 'phase': 2, 'label': 'Running symbol specialists'}, default=str)}\n\n"
+                        _msg = 'Phase 2/4: Running symbol specialists...'
+                        print(f"[stream] {_msg}")
+                        yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
+                        _label = 'Running symbol specialists'
+                        print(f"[stream] Phase 2/4: {_label}")
+                        yield f"data: {json.dumps({'type': 'phase', 'phase': 2, 'label': _label}, default=str)}\n\n"
                     elif heartbeat_count % 3 == 0:
-                        yield f"data: {json.dumps({'type': 'log', 'message': f'Still analyzing ({elapsed}s elapsed)...'}, default=str)}\n\n"
+                        _msg = f'Still analyzing ({elapsed}s elapsed)'
+                        print(f"[stream] {_msg}")
+                        yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
                     yield ": stage2-heartbeat\n\n"
             response = task.result()
-            yield f"data: {json.dumps({'type': 'log', 'message': 'Phase 4/4: Persisting results and snapshots...'}, default=str)}\n\n"
-            yield f"data: {json.dumps({'type': 'phase', 'phase': 4, 'label': 'Persisting results and snapshots'}, default=str)}\n\n"
+            _msg = 'Phase 4/4: Persisting results and snapshots...'
+            print(f"[stream] {_msg}")
+            yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
+            _label = 'Persisting results and snapshots'
+            print(f"[stream] Phase 4/4: {_label}")
+            yield f"data: {json.dumps({'type': 'phase', 'phase': 4, 'label': _label}, default=str)}\n\n"
 
             # ── Verbose diagnostics ─────────────────────────────────────────
             # Articles that were ingested and passed Stage 0
             model_inputs = response.model_inputs
             if model_inputs and model_inputs.articles:
-                yield f"data: {json.dumps({'type': 'log', 'message': f'▶ {response.posts_scraped} articles ingested — {len(model_inputs.articles)} selected for analysis'}, default=str)}\n\n"
+                _msg = f'▶ {response.posts_scraped} articles ingested — {len(model_inputs.articles)} selected for analysis'
+                print(f"[stream] {_msg}")
+                yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
                 for art in model_inputs.articles:
                     art_desc = getattr(art, "description", None) or getattr(art, "summary", "") or ""
                     art_kw = getattr(art, "keywords", None) or []
+                    _art_msg = f"  [{art.source or 'Unknown'}] {art.title or ''}"
+                    print(f"[stream] {_art_msg}")
                     yield f"data: {json.dumps({'type': 'article', 'source': art.source or 'Unknown', 'title': art.title or '', 'description': str(art_desc)[:500], 'keywords': list(art_kw)}, default=str)}\n\n"
             else:
-                yield f"data: {json.dumps({'type': 'log', 'message': f'▶ {response.posts_scraped} articles ingested (model_inputs empty — pipeline used snapshot fallback)'}, default=str)}\n\n"
+                _msg = f'▶ {response.posts_scraped} articles ingested (model_inputs empty — pipeline used snapshot fallback)'
+                print(f"[stream] {_msg}")
+                yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
 
             # Per-symbol Stage 1 + Stage 2 diagnostic summary
             response_dict = response.model_dump(mode="json")
@@ -1382,13 +1431,19 @@ async def analyze_market_stream(
                 count_str = f"{count} matched articles" if count is not None else "article count unknown"
                 kw_str = f" | keywords: {', '.join(terms[:6])}" if terms else ""
                 hint_str = f" ({hint})" if hint else ""
-                yield f"data: {json.dumps({'type': 'log', 'message': f'▶ {sym}: {count_str}{hint_str} → {conf}% confidence{kw_str}'}, default=str)}\n\n"
+                _msg = f'▶ {sym}: {count_str}{hint_str} → {conf}% confidence{kw_str}'
+                print(f"[stream] {_msg}")
+                yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
 
-            yield f"data: {json.dumps({'type': 'log', 'message': '▶ Analysis complete'}, default=str)}\n\n"
+            _msg = '▶ Analysis complete'
+            print(f"[stream] {_msg}")
+            yield f"data: {json.dumps({'type': 'log', 'message': _msg}, default=str)}\n\n"
             yield f"data: {json.dumps({'type': 'result', 'data': response_dict}, default=str)}\n\n"
             yield f"data: {json.dumps({'type': 'done'}, default=str)}\n\n"
             return
         except Exception as exc:
+            _msg = f'Error: {exc}'
+            print(f"[stream] {_msg}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
             yield f"data: {json.dumps({'type': 'done'}, default=str)}\n\n"
         finally:
