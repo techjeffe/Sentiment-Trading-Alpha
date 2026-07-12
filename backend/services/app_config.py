@@ -296,6 +296,19 @@ def _normalize_symbol_proxy_terms(data: Any, allowed_symbols: List[str]) -> Dict
     return normalized
 
 
+def _normalize_symbol_proxy_terms_generated_at(data: Any, allowed_symbols: List[str]) -> Dict[str, str]:
+    if not isinstance(data, dict):
+        return {}
+    allowed = set(allowed_symbols)
+    normalized: Dict[str, str] = {}
+    for symbol, timestamp in data.items():
+        sym = _normalize_symbol(symbol)
+        value = str(timestamp or "").strip()
+        if sym in allowed and value:
+            normalized[sym] = value
+    return normalized
+
+
 def _normalize_rss_article_limits(data: Any) -> Dict[str, int]:
     limits = dict(DEFAULT_RSS_ARTICLE_LIMITS)
     if isinstance(data, dict):
@@ -520,6 +533,10 @@ def _maybe_import_legacy_app_config(db: Session) -> AppConfig | None:
             parse_json(row_value("symbol_proxy_terms", {}), {}),
             build_supported_symbols(legacy_custom_symbols),
         ),
+        symbol_proxy_terms_generated_at=_normalize_symbol_proxy_terms_generated_at(
+            parse_json(row_value("symbol_proxy_terms_generated_at", {}), {}),
+            build_supported_symbols(legacy_custom_symbols),
+        ),
         display_timezone=_normalize_display_timezone(row_value("display_timezone", "")),
         enabled_rss_feeds=_normalize_enabled_rss_feeds(parse_json(row_value("enabled_rss_feeds", []), []), legacy_custom_rss_feeds),
         custom_rss_feeds=legacy_custom_rss_feeds,
@@ -632,6 +649,16 @@ def get_or_create_app_config(db: Session) -> AppConfig:
         )
         if getattr(config, "symbol_proxy_terms", None) != normalized_symbol_proxy_terms:
             config.symbol_proxy_terms = normalized_symbol_proxy_terms
+            changed = True
+        if getattr(config, "symbol_proxy_terms_generated_at", None) is None:
+            config.symbol_proxy_terms_generated_at = {}
+            changed = True
+        normalized_symbol_proxy_terms_generated_at = _normalize_symbol_proxy_terms_generated_at(
+            getattr(config, "symbol_proxy_terms_generated_at", {}),
+            supported_symbols,
+        )
+        if getattr(config, "symbol_proxy_terms_generated_at", None) != normalized_symbol_proxy_terms_generated_at:
+            config.symbol_proxy_terms_generated_at = normalized_symbol_proxy_terms_generated_at
             changed = True
         normalized_display_timezone = _normalize_display_timezone(getattr(config, "display_timezone", ""))
         if getattr(config, "display_timezone", "") != normalized_display_timezone:
@@ -789,6 +816,7 @@ def get_or_create_app_config(db: Session) -> AppConfig:
         symbol_prompt_overrides={},
         symbol_company_aliases={},
         symbol_proxy_terms={},
+        symbol_proxy_terms_generated_at={},
         display_timezone="",
         enabled_rss_feeds=DEFAULT_RSS_FEED_URLS.copy(),
         custom_rss_feeds=[],
@@ -892,6 +920,16 @@ def update_app_config(db: Session, payload: Dict[str, Any]) -> AppConfig:
     else:
         config.symbol_proxy_terms = _normalize_symbol_proxy_terms(
             getattr(config, "symbol_proxy_terms", {}),
+            build_supported_symbols(custom_symbols),
+        )
+    if "symbol_proxy_terms_generated_at" in payload:
+        config.symbol_proxy_terms_generated_at = _normalize_symbol_proxy_terms_generated_at(
+            payload.get("symbol_proxy_terms_generated_at"),
+            build_supported_symbols(custom_symbols),
+        )
+    else:
+        config.symbol_proxy_terms_generated_at = _normalize_symbol_proxy_terms_generated_at(
+            getattr(config, "symbol_proxy_terms_generated_at", {}),
             build_supported_symbols(custom_symbols),
         )
     if "enabled_rss_feeds" in payload or "custom_rss_feeds" in payload or "custom_rss_feed_labels" in payload:
@@ -1235,6 +1273,10 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         ),
         "symbol_proxy_terms": _normalize_symbol_proxy_terms(
             getattr(config, "symbol_proxy_terms", {}),
+            build_supported_symbols(custom_symbols),
+        ),
+        "symbol_proxy_terms_generated_at": _normalize_symbol_proxy_terms_generated_at(
+            getattr(config, "symbol_proxy_terms_generated_at", {}),
             build_supported_symbols(custom_symbols),
         ),
         "display_timezone": _normalize_display_timezone(getattr(config, "display_timezone", "")),

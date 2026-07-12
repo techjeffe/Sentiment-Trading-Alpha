@@ -24,6 +24,7 @@ from config.market_constants import SYMBOL_RELEVANCE_TERMS
 from schemas.analysis import AnalysisRequest, AnalysisResponse, SentimentScore, TradingSignal, BacktestResults
 from services.analysis.cache_service import PriceCacheService
 from services.analysis.sentiment_service import SentimentService
+from services.symbol_proxy_terms import ensure_symbol_proxy_terms_fresh
 from services.analysis.signal_service import SignalService
 from services.analysis.market_data_service import MarketDataService
 from services.analysis.materiality_service import MaterialityService
@@ -231,13 +232,21 @@ class PipelineService:
 
             # ── Stage 2: Sentiment analysis ──────────────────────────────────
             sentiment_started_at = time.time()
+            extraction_model = str(getattr(config, "extraction_model", "") or "").strip()
+            symbol_proxy_terms_by_symbol = await ensure_symbol_proxy_terms_fresh(
+                db=db,
+                config=config,
+                symbols=self.symbols,
+                model_name=extraction_model or self.model_name,
+            )
             sentiment_results, sentiment_trace = await self._sentiment.analyze_sentiment(
                 posts=posts,
                 symbols=self.symbols,
                 price_context=price_context,
                 prompt_overrides=prompt_overrides,
                 model_name=self.model_name,
-                extraction_model=str(getattr(config, "extraction_model", "") or "").strip() or None,
+                extraction_model=extraction_model or None,
+                symbol_proxy_terms_by_symbol=symbol_proxy_terms_by_symbol,
             )
             stage_metrics["sentiment"] = {
                 "status": "completed",
@@ -420,6 +429,7 @@ class PipelineService:
                             symbol=sym,
                             blue_team_output=parsed_payload,
                             raw_scores=raw_scores,
+                            blended_scores=raw_scores,
                             final_signal={
                                 "type": signal_dict.get("signal_type"),
                                 "conviction": signal_dict.get("conviction_level"),

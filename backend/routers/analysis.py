@@ -29,6 +29,7 @@ from schemas.analysis import (
     ModelInputArticle,
     IngestionTraceDebug,
 )
+from services.symbol_proxy_terms import ensure_symbol_proxy_terms_fresh
 from database.engine import get_db
 from database.models import (
     ScrapedArticle,
@@ -645,6 +646,15 @@ async def rerun_analysis_snapshot(
         else:
             signal_age_hours = 0.0
 
+        # Ensure symbol proxy terms are fresh (30-day TTL check)
+        extraction_model_for_terms = rerun_extraction or effective_model
+        symbol_proxy_terms_by_symbol = await ensure_symbol_proxy_terms_fresh(
+            db=db,
+            config=config,
+            symbols=symbols,
+            model_name=extraction_model_for_terms,
+        )
+
         sentiment_results, sentiment_trace = await sentiment_service.analyze_sentiment(
             posts=posts,
             symbols=symbols,
@@ -654,7 +664,7 @@ async def rerun_analysis_snapshot(
             extraction_model=rerun_extraction,
             reasoning_model=rerun_reasoning,
             web_context_by_symbol=web_context_by_symbol,
-            symbol_proxy_terms_by_symbol=dict(getattr(config, "symbol_proxy_terms", {}) or {}),
+            symbol_proxy_terms_by_symbol=symbol_proxy_terms_by_symbol,
         )
         stage_metrics.update(sentiment_trace.get("stage_metrics") or {})
 

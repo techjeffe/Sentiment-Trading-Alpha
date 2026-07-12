@@ -24,7 +24,7 @@ from services.app_config import (
 from services.ollama import get_ollama_status
 from services.paper_trading import close_positions_for_removed_symbols
 from services.remote_snapshot import trigger_remote_snapshot_delivery
-from services.symbol_proxy_terms import generate_proxy_terms_for_symbol
+from services.symbol_proxy_terms import ensure_symbol_proxy_terms_fresh, generate_proxy_terms_for_symbol
 from services.secret_store import (
     get_telegram_credentials,
     clear_telegram_secrets,
@@ -185,20 +185,13 @@ async def _generate_symbol_keywords_background(symbols: List[str], model_name: s
     db = SessionLocal()
     try:
         config = get_or_create_app_config(db)
-        symbol_proxy_terms = dict(getattr(config, "symbol_proxy_terms", {}) or {})
-        for symbol in symbols:
-            result = await generate_proxy_terms_for_symbol(
-                symbol=symbol,
-                model_name=model_name,
-                force_refresh=False,
-            )
-            normalized_symbol = str(result.get("symbol") or symbol).upper().strip()
-            terms = list(result.get("terms") or [])
-            if normalized_symbol and terms:
-                symbol_proxy_terms[normalized_symbol] = terms
-        config.symbol_proxy_terms = symbol_proxy_terms
-        db.add(config)
-        db.commit()
+        await ensure_symbol_proxy_terms_fresh(
+            db=db,
+            config=config,
+            symbols=symbols,
+            model_name=model_name,
+            force=True,
+        )
     except Exception as exc:
         print(f"Background symbol keyword generation error: {exc}")
     finally:

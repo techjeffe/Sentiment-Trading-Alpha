@@ -27,6 +27,7 @@ from services.analysis.hysteresis_service import HysteresisService
 from services.analysis.persistence_service import PersistenceService
 from services.analysis.backtest_service import BacktestService
 from services.analysis.cache_service import PriceCacheService
+from services.symbol_proxy_terms import ensure_symbol_proxy_terms_fresh
 from services.risk_policy_runtime import build_crazy_ramp_context
 
 
@@ -170,6 +171,14 @@ class StreamService:
         sentiment_results = None
         sentiment_trace = None
         _sentiment_start = time.time()
+        # Ensure symbol proxy terms are fresh (30-day TTL check)
+        extraction_model_for_terms = extraction_model or pipeline.model_name
+        symbol_proxy_terms_by_symbol = await ensure_symbol_proxy_terms_fresh(
+            db=db,
+            config=config,
+            symbols=symbols,
+            model_name=extraction_model_for_terms,
+        )
         sentiment_task = asyncio.create_task(
             self._sentiment.analyze_sentiment(
                 posts=posts,
@@ -180,7 +189,7 @@ class StreamService:
                 extraction_model=extraction_model,
                 reasoning_model=reasoning_model,
                 web_context_by_symbol=web_context_by_symbol,
-                symbol_proxy_terms_by_symbol=dict(getattr(config, "symbol_proxy_terms", {}) or {}),
+                symbol_proxy_terms_by_symbol=symbol_proxy_terms_by_symbol,
                 openai_base_url=getattr(config, "openai_base_url", None),
                 openai_model=getattr(config, "openai_model", None),
             )

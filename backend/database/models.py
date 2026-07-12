@@ -334,6 +334,9 @@ class AppConfig(Base):
     symbol_prompt_overrides = Column(JSON, nullable=False, default={})
     symbol_company_aliases = Column(JSON, nullable=False, default={})
     symbol_proxy_terms = Column(JSON, nullable=False, default={})
+    # ISO8601 timestamp per symbol of when its proxy terms were last generated —
+    # drives the 30-day TTL recheck in ensure_symbol_proxy_terms_fresh().
+    symbol_proxy_terms_generated_at = Column(JSON, nullable=False, default={})
     display_timezone = Column(String(64), nullable=False, default="")
     enabled_rss_feeds = Column(JSON, nullable=False, default=[])
     custom_rss_feeds = Column(JSON, nullable=False, default=[])

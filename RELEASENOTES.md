@@ -1,3 +1,31 @@
+# Release Notes — July 11, 2026
+
+## Fix: Symbol Keyword Caching — Persisted to DB with 30-Day TTL
+
+Stage 1 keyword generation for custom stock symbols was calling the LLM on **every** analysis run, even though results were cached only in memory (lost on restart). This fix persists generated proxy terms to the database with a 30-day TTL, so custom symbols only hit the LLM once every 30 days instead of every run.
+
+### How it works
+
+- **Built-in symbols** (USO, BITO, QQQ, SPY) — use static terms from `TICKER_PROXY_MAP`. No LLM call, no change.
+- **Custom symbols** — on first run after this fix, terms are generated via LLM and persisted to `app_config.symbol_proxy_terms` + `app_config.symbol_proxy_terms_generated_at`.
+- **Subsequent runs** — the DB-persisted terms are loaded and used directly. No LLM call.
+- **30-day TTL** — if terms are older than 30 days, they are regenerated via LLM and the timestamp is updated.
+- **New symbols added** — a background task generates and persists terms immediately.
+- **Manual refresh** — the Admin UI "Refresh Symbol Keywords" button forces regeneration.
+
+### Files changed
+
+- `backend/database/models.py` — Added `symbol_proxy_terms_generated_at` JSON column to track generation timestamps
+- `backend/database/migrate.py` — Migration to add the new column to existing databases
+- `backend/services/app_config.py` — Added `_normalize_symbol_proxy_terms_generated_at()` helper; wired into config load, update, and serialize paths
+- `backend/services/symbol_proxy_terms.py` — Added `ensure_symbol_proxy_terms_fresh()` function that checks TTL and regenerates stale terms
+- `backend/services/analysis/pipeline_service.py` — Calls `ensure_symbol_proxy_terms_fresh()` before sentiment analysis
+- `backend/services/analysis/stream_service.py` — Calls `ensure_symbol_proxy_terms_fresh()` before streaming sentiment analysis
+- `backend/routers/analysis.py` — Calls `ensure_symbol_proxy_terms_fresh()` in the rerun endpoint
+- `backend/routers/config.py` — Updated `_generate_symbol_keywords_background()` to use `ensure_symbol_proxy_terms_fresh()`
+
+---
+
 # Release Notes — July 10, 2026
 
 ## Feature: Alpha Analytics — Attribution, Rolling IC, Perturbation Testing, and Signal Dashboard

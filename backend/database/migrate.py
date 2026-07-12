@@ -36,6 +36,7 @@ def migrate():
             ("display_timezone", "VARCHAR(64)", "''"),
             ("symbol_company_aliases", "JSON", "'{}'"),
             ("symbol_proxy_terms", "JSON", "'{}'"),
+            ("symbol_proxy_terms_generated_at", "JSON", "'{}'"),
             ("enabled_rss_feeds", "JSON", "'[]'"),
             ("custom_rss_feeds", "JSON", "'[]'"),
             ("custom_rss_feed_labels", "JSON", "'{}'"),
