@@ -181,7 +181,22 @@ class SignalService:
 
             # ── Decay: use separate hold half-life for existing positions ──
             has_existing = bool(previous_action)
-            decay_factor = self._compute_decay_factor(sym, signal_age_hours)
+            
+            # Calculate P&L for momentum-adjusted decay
+            _pnl_pct = 0.0
+            if has_existing and quotes_by_symbol:
+                _prev_price = float(previous_rec.get("entry_price", 0.0) or 0.0)
+                _current_quote = quotes_by_symbol.get(sym, {}) or quotes_by_symbol.get(
+                    previous_rec.get("symbol", ""), {}
+                )
+                _current_price = float(_current_quote.get("current_price", 0.0) or 0.0)
+                if _prev_price > 0 and _current_price > 0:
+                    if previous_action == "BUY":
+                        _pnl_pct = (_current_price - _prev_price) / _prev_price * 100.0
+                    else:  # SELL/SHORT
+                        _pnl_pct = (_prev_price - _current_price) / _prev_price * 100.0
+            
+            decay_factor = self._compute_decay_factor(sym, signal_age_hours, _pnl_pct)
             hold_decay_factor = self._compute_hold_decay_factor(sym, signal_age_hours)
             effective_directional = directional * decay_factor if directional is not None else directional
             effective_hold_directional = directional * hold_decay_factor if directional is not None else directional
@@ -866,20 +881,42 @@ class SignalService:
 
         return f"{min(raw, cap)}x"
 
-    def _compute_decay_factor(self, symbol: str, age_hours: float) -> float:
+    def _compute_decay_factor(self, symbol: str, age_hours: float, pnl_pct: float = 0.0) -> float:
         """
         Return the decay multiplier for a signal that is `age_hours` old.
 
         Uses per-symbol half-lives from logic_config signal_decay block.
         At age=0 the factor is 1.0 (no decay); it approaches min_decay_factor asymptotically.
         When signal_decay.enabled is False, always returns 1.0.
+        
+        Momentum Adjustment: If momentum_decay_adjustment is enabled,
+        adjust the effective half-life based on P&L:
+        - Favorable momentum (pnl_pct > threshold): extend half-life (slower decay)
+        - Adverse momentum (pnl_pct < -threshold): accelerate decay (faster decay)
         """
         decay_cfg = self._L.get("signal_decay", {})
         if not decay_cfg.get("enabled", True) or age_hours <= 0.0:
             return 1.0
+        
         half_lives = decay_cfg.get("symbol_half_lives", {})
         half_life = float(half_lives.get(str(symbol).upper(), decay_cfg.get("default_half_life_hours", 3.0)))
         min_factor = float(decay_cfg.get("min_decay_factor", 0.10))
+        
+        # Momentum-adjusted decay
+        momentum_cfg = self._L.get("momentum_decay_adjustment", {})
+        if momentum_cfg.get("enabled", False) and pnl_pct != 0.0:
+            favorable_threshold = float(momentum_cfg.get("favorable_threshold_pct", 1.0))
+            adverse_threshold = float(momentum_cfg.get("adverse_threshold_pct", -0.5))
+            favorable_extension = float(momentum_cfg.get("favorable_momentum_extension", 1.5))
+            adverse_acceleration = float(momentum_cfg.get("adverse_momentum_acceleration", 0.5))
+            
+            if pnl_pct > favorable_threshold:
+                # Price moving in favor - extend half-life (slower decay)
+                half_life *= favorable_extension
+            elif pnl_pct < adverse_threshold:
+                # Price moving against - accelerate decay (faster decay)
+                half_life *= adverse_acceleration
+        
         raw = 0.5 ** (age_hours / half_life)
         return max(min_factor, raw)
 

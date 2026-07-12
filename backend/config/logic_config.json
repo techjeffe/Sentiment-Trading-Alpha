@@ -44,6 +44,22 @@
   "min_same_day_exit_edge_pct": 1.0,
   "stop_loss_pct": 2.0,
   "take_profit_pct": 3.0,
+  "tiered_profit_scaling": {
+    "_comment": "Scale out of positions at multiple profit levels instead of all-at-once. Remaining position converts to tight trailing stop.",
+    "enabled": true,
+    "tiers": [
+      {"pnl_pct": 2.0, "sell_fraction": 0.30},
+      {"pnl_pct": 4.0, "sell_fraction": 0.30}
+    ],
+    "remainder_trailing_stop_tighten": 0.3
+  },
+  "adaptive_stops": {
+    "_comment": "Replace fixed stop_loss_pct with ATR-based stops. Wider in high vol, tighter in low vol.",
+    "enabled": true,
+    "atr_multiplier": 1.5,
+    "min_stop_pct": 1.0,
+    "max_stop_pct": 5.0
+  },
   "leverage": {
     "_comment": "ATR-based volatility caps. When 14-day ATR % exceeds high_vol_atr_pct the position is capped at 1x regardless of profile. Exceeding medium_vol_atr_pct caps at 2x. Conservative profile (inverse ETF) is unaffected.",
     "high_vol_atr_pct": 3.0,
@@ -161,6 +177,14 @@
       "MEDIUM": 2.5,
       "LOW": 1.8
     }
+  },
+  "momentum_decay_adjustment": {
+    "_comment": "Adjust signal decay based on price momentum. Let winners ride, cut losers faster.",
+    "enabled": true,
+    "favorable_momentum_extension": 1.5,
+    "adverse_momentum_acceleration": 0.5,
+    "favorable_threshold_pct": 1.0,
+    "adverse_threshold_pct": -0.5
   },
   "signal_decay": {
     "half_life_hours": {

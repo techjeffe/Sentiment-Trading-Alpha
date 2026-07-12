@@ -1,3 +1,181 @@
+# Release Notes — July 12, 2026
+
+## Feature: Enhanced Trade Synthesis — Let Winners Ride, Cut Losers Faster
+
+Implemented three major improvements to trade synthesis and position management to maximize profits and minimize losses:
+
+### 1. Tiered Profit-Taking with Scale-Out Logic
+**Problem:** Fixed 3% take-profit closed entire position, cutting winners short before they could run.
+**Solution:** Added configurable tiered profit scaling in `logic_config.json`:
+- **2% profit:** Sell 30% of position (de-risk)
+- **4% profit:** Sell another 30% (lock in gains)  
+- **Remaining 40%:** Convert to tight trailing stop (0.3x stop_loss_pct)
+
+**Implementation:**
+- New `tiered_profit_scaling` config block in `logic_config.json`
+- `_check_tiered_profit_scaling()` function in `paper_trading.py`
+- Automatic partial closes when tiers are hit
+- Tight trailing stop set on remainder after all tiers taken
+
+**Impact:** Locks in profits while keeping exposure to large moves. Positions can now participate in 10%+ runs while de-risking along the way.
+
+### 2. ATR-Based Adaptive Stops
+**Problem:** Fixed 2% stop-loss got triggered by normal noise in high-volatility periods and was too wide in low-volatility periods.
+**Solution:** Dynamic stop-loss based on 14-day ATR:
+- **Stop distance = ATR_14 × multiplier** (default 1.5x)
+- **High vol (ATR>3%):** Stop ≈ 4.5% (wider, avoids noise)
+- **Low vol (ATR<1%):** Stop ≈ 1.5% (tighter, cuts faster)
+- Configurable min/max bounds (1.0% to 5.0%)
+
+**Implementation:**
+- New `adaptive_stops` config block in `logic_config.json`
+- `_calculate_adaptive_stop_loss()` function in `paper_trading.py`
+- Integrated into stop-loss check logic (replaces fixed `stop_loss_pct`)
+
+**Impact:** Stops adapt to market conditions. No more getting stopped out by normal volatility in crazy markets like crypto or oil.
+
+### 3. Momentum-Accelerated Signal Decay
+**Problem:** Signal decay was purely time-based. Winning positions decayed at same rate as stagnant ones, cutting winners too early.
+**Solution:** Adjust decay factor based on price momentum:
+- **Price moving in favor** (>1% toward target): Extend half-life by 50% (slower decay)
+- **Price moving against** (>0.5% against): Accelerate decay by 2x (faster decay)
+- **Sideways:** Use standard half-life
+
+**Implementation:**
+- New `momentum_decay_adjustment` config block in `logic_config.json`
+- Modified `_compute_decay_factor()` in `signal_service.py` to accept `pnl_pct` parameter
+- P&L calculated from previous position entry price vs current price
+- Decay half-life dynamically adjusted based on momentum direction
+
+**Impact:** Keeps you in winning trades longer (slower signal decay) and exits losing trades faster (accelerated decay). Aligns signal lifecycle with trade performance.
+
+### Configuration
+All three features are **enabled by default** in `logic_config.json`. To disable any feature:
+```json
+{
+  "tiered_profit_scaling": { "enabled": false },
+  "adaptive_stops": { "enabled": false },
+  "momentum_decay_adjustment": { "enabled": false }
+}
+```
+
+### Files Changed
+- `backend/config/logic_config.json` — Added three new config blocks
+- `backend/services/paper_trading.py` — Added tiered profit scaling and adaptive stops
+- `backend/services/analysis/signal_service.py` — Added momentum-adjusted decay
+
+---
+
+## Fix: Alpha Analytics — Charts Were Empty (IC / Perturbation Joined Wrong Table)
+
+The `/alpha` page rendered no IC, scatter, or perturbation-return data because both analytics endpoints joined `trade_snapshots` against the wrong table.
+
+**Root cause (`backend/routers/alpha.py`, `backend/services/analysis/perturbation.py`):**
+
+- `trade_snapshots.trade_id` is a foreign key to `trades.id`, but the queries joined it against `paper_trades.id` — a separate table. The JOIN always returned zero rows, so the IC endpoint reported "No data yet" and the perturbation test showed `—` for every horizon.
+- The IC endpoint also referenced `paper_trades.analysis_request_id` / `paper_trades.underlying`, which do not exist on `paper_trades` (the fields are `request_id` / `underlying_symbol` on `trades`).
+
+**Fix:** Both endpoints now query `trades` (matched via `trades.request_id = decision_log_run.run_id` and `COALESCE(t.underlying_symbol, t.symbol)`), which is the correct parent of `trade_snapshots`. The perturbation service was updated to build its `trade_id → {horizon → return}` lookup against `trades` as well.
+
+## Data: Backfill Scripts for trade_snapshots and Blended Scores
+
+With the endpoint fixed, the next blocker was missing historical data. Two reusable backfill utilities were added (both safe to re-run; they skip existing rows):
+
+**`backend/backfill_alpha_data.py`:**
+- Backfills `trades` rows from `paper_trades` (so historical paper runs gain a `trades` parent that `trade_snapshots` can reference).
+- Fetches 15m OHLCV via the codebase's `PriceClient.get_ohlcv_data_range` (uses `ticker.history()`, which returns flat columns) and creates `trade_snapshots` for the `1h / 4h / 1d / 3d / 1w` horizons whose target timestamp has already passed.
+- *Note:* an earlier draft used `yf.download()`, which returns MultiIndex columns in yfinance 1.3.0 — `"Close" not in df.columns` was always true, so every symbol silently failed. Using `PriceClient` fixed it.
+- Result after running: **886 trade_snapshots** (4h: 269, 1d: 245, 3d: 90; 1w empty because the backfilled trades are only ~6 days old — correct).
+
+**`backend/backfill_decision_log_scores.py`:**
+- Every `decision_log_symbol` row has `raw_confidence_score` / `raw_directional_score`, but `blended_confidence_score` / `blended_directional_score` were populated for only 242 of 61,590 rows. The IC endpoint joins on the *blended* scores, so historical runs produced zero confidence/return pairs.
+- Backfills `blended_* = raw_*` wherever blended is NULL (the correct value for a single un-blended run — exactly what the live decay-blend computes with no prior-run history).
+- Result after running: **61,348 rows** backfilled. The IC join now yields real pairs (4h: 200, 1d: 175, 3d: 49).
+
+`event_type` remains unpopulated in `decision_log.db` (the `blue_team_structured_output` blobs are stored as the literal string `"null"`), so the scatter chart renders in a single default color and the attribution chart groups everything as "unknown" until fresh runs populate it. This is a pre-existing data-capture gap, not a regression.
+
+## Feature: /alpha Explanatory "How to Read" Section
+
+Added a footer section to the `/alpha` page (`frontend/src/app/alpha/page.tsx`) explaining every panel and giving actionable tuning advice:
+
+- **Information Coefficient (IC)** — what the −1…+1 scale means and strong/weak/noise thresholds.
+- **Confidence vs. Return Scatter** — how to read the dot distribution and what miscalibration looks like.
+- **Signal Attribution by Event Type** — how to raise/lower per-type thresholds in `logic_config.json`.
+- **Sensitivity / Perturbation Test** — robust vs. curve-fit vs. too-loose vs. too-tight outcomes, with a note to try ±5/±10/±20%.
+- **Quick Wins to Improve Your Alpha** — six concrete steps (event-type filtering, threshold tuning, holding-period adjustment, symbol-specific tuning, rolling-IC window review, regime-adaptation check), each referencing `logic_config.json` / `logic_config` toggles.
+
+### Files changed
+
+- `backend/routers/alpha.py` — IC query now joins `trades` (not `paper_trades`); returns key fixed to `request_id` / `underlying`
+- `backend/services/analysis/perturbation.py` — lookup rebuilt against `trades` instead of `paper_trades`
+- `backend/backfill_alpha_data.py` *(new)* — backfills `trades` + `trade_snapshots` from `paper_trades`
+- `backend/backfill_decision_log_scores.py` *(new)* — backfills `blended_*` scores from `raw_*` in `decision_log_symbol`
+- `frontend/src/app/alpha/page.tsx` — added "How to Read These Metrics & Improve Your Setup" explanation section
+
+## Fix: PnL Tracker — Suppress False "Delisted" Spam + Handle Friday Evening Trades
+
+After the `trades` table was backfilled from `paper_trades` (see above), the PnL tracker began repeatedly logging `$SYMBOL: possibly delisted; no price data found` for valid symbols on every scheduled run.
+
+**Root cause (`backend/services/pnl_tracker.py`):** The backfill created ~221 `trades` rows dated July 6–11, including many entered Friday evening after market close. The tracker's `_resolve_price_at_or_after` calls `ticker.history()` for each horizon's target timestamp; for targets landing on a **weekend** yfinance returns no 15m bars and prints a misleading "possibly delisted" error. Because those timestamps are permanently in the past on a non-trading day, the snapshot was retried on every cycle.
+
+Additionally, leveraged/inverse ETFs (SPCX, SPXL, SPXS, PSQ, SQQQ, TQQQ) traded on Friday evening after extended hours (post-8pm ET) also trigger the false "delisted" message — these symbols simply don't have 15m data available from yfinance at those times.
+
+**Fix:** 
+1. Added a weekend guard in `_resolve_price_at_or_after` that returns `None` before calling yfinance when `target_timestamp.weekday() >= 5` (Saturday/Sunday). Evaluated per horizon, so weekday horizons of a weekend trade (e.g. a `3d` target landing on Tuesday) are still snapshotted.
+2. Wrapped the `get_ohlcv_data_range` call in `contextlib.redirect_stdout()` and `contextlib.redirect_stderr()` so yfinance's false "delisted" message is silenced. The tracker already treats an empty result as "no data" and skips — it now does so **quietly**. Verified that yfinance 1.3.0 prints to stderr (not stdout) and that `contextlib.redirect_stderr` suppresses it.
+
+No spam, no wasted retries, no network calls for hopeless targets. The tracker still retries valid pending snapshots normally.
+
+### Files changed
+
+- `backend/services/pnl_tracker.py` — weekend guard in `_resolve_price_at_or_after` + stderr/stdout suppression via contextlib
+
+## Fix: Frontend Crash on SSE Stream Abort (ECONNRESET/"Error: aborted")
+
+The Next.js dev server was crashing with `uncaughtException: Error: aborted` (code: `ECONNRESET`) after the analysis stream completed or the client disconnected. This forced a manual server restart every time.
+
+**Root cause (`frontend/src/app/api/analyze/stream/route.ts`):** The SSE proxy route (Edge runtime) had a bug in its `ReadableStream` implementation. When the client disconnected (e.g., navigating away, closing the tab, or the analysis completing), the response controller was already closed/errored. The `finally` block then called `controller.close()` which threw `Error: aborted` — and because it was in `finally` (outside the try/catch), it became an uncaught exception that crashed the server.
+
+Additionally, the route didn't wire `request.signal` through to the backend fetch, so when the client disconnected, the proxy kept reading from the backend stream unnecessarily.
+
+**Fix:**
+1. Added `signal: request.signal` to the backend fetch call — when the client disconnects, the backend stream is aborted cleanly
+2. Added an `abort` event listener on `request.signal` that cancels the reader when the client disconnects, preventing enqueue into an already-closed controller
+3. Wrapped `controller.close()` and `reader.releaseLock()` in `try/catch` — the actual crash fix, since these throw when the client already disconnected
+4. Added `cancel()` method to the `ReadableStream` to handle client-initiated cancellation gracefully
+5. In the `catch` block, skip error enqueue if `request.signal.aborted` (expected disconnect, not a real error)
+
+The server no longer crashes when the analysis stream ends or the client disconnects.
+
+### Files changed
+
+- `frontend/src/app/api/analyze/stream/route.ts` — abort handling, try/catch around controller close, cancel() method
+
+## Fix: Paper Trading Wrong Entry Price for Inverse ETF Mappings
+
+The `/alpha` page showed 80%+ gains for some NVDA trades, which was impossible. The root cause was wrong `entry_price` values in the `trades` table.
+
+**Root cause (`backend/services/paper_trading.py`):**
+
+When a SHORT signal on NVDA mapped to PSQ (inverse ETF), the `entry_price` was stored as NVDA's price ($196-205) instead of PSQ's price (~$25). This caused `trade_snapshots.return_pct` to show 87%+ gains (comparing PSQ's observed price ~$25 against NVDA's entry price ~$200).
+
+Two locations had the bug:
+1. **Line ~756** — `price_data = quotes_by_symbol.get(execution_ticker) or quotes_by_symbol.get(underlying) or {}` — when `execution_ticker` (PSQ) wasn't in `quotes_by_symbol`, it fell back to `underlying`'s (NVDA) price.
+2. **`_resolve_position_market_price()`** — used `underlying`'s price for P&L calculations instead of `execution_ticker`'s price.
+
+**Fix:**
+1. Updated entry price logic to fetch `execution_ticker`'s price directly via `PriceClient.get_ohlcv_data_range()` if not in `quotes_by_symbol`.
+2. Updated `_resolve_position_market_price()` with the same fix.
+3. Cleaned up bad historical data: deleted 1266 `trade_snapshots` (all had wrong `return_pct`) and 442 backfilled `trades` (July 6-11).
+
+**Result:** New trades will have correct `entry_price` (execution ticker's price, not underlying's price). The `/alpha` page will show correct returns once new trades are created and snapshots generated.
+
+### Files changed
+
+- `backend/services/paper_trading.py` — fixed entry price logic + position market price resolution
+
+---
+
 # Release Notes — July 11, 2026
 
 ## Fix: Symbol Keyword Caching — Persisted to DB with 30-Day TTL

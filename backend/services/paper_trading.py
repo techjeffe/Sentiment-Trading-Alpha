@@ -64,15 +64,121 @@ def _directional_pnl(signal_type: str, entry_price: float, current_price: float,
     return amount * (_directional_return_pct(signal_type, entry_price, current_price) / 100.0)
 
 
+def _calculate_adaptive_stop_loss(pos, quotes_by_symbol: Dict[str, Dict[str, Any]], logic_config: dict) -> float:
+    """Calculate ATR-based adaptive stop loss instead of fixed percentage."""
+    adaptive_cfg = logic_config.get("adaptive_stops", {})
+    if not adaptive_cfg.get("enabled", False):
+        return float(logic_config.get("stop_loss_pct", 2.0))
+    
+    execution_ticker = str(getattr(pos, "execution_ticker", "") or "").upper()
+    underlying = str(getattr(pos, "underlying", "") or "").upper()
+    
+    # Try to get ATR from quotes
+    price_data = quotes_by_symbol.get(execution_ticker) or quotes_by_symbol.get(underlying) or {}
+    indicators = price_data.get("technical_indicators", {})
+    atr_pct = float(indicators.get("atr_14_pct", 0.0) or 0.0)
+    
+    if atr_pct <= 0:
+        # Fall back to fixed stop if ATR not available
+        return float(logic_config.get("stop_loss_pct", 2.0))
+    
+    atr_multiplier = float(adaptive_cfg.get("atr_multiplier", 1.5))
+    min_stop = float(adaptive_cfg.get("min_stop_pct", 1.0))
+    max_stop = float(adaptive_cfg.get("max_stop_pct", 5.0))
+    
+    adaptive_stop = atr_pct * atr_multiplier
+    return max(min_stop, min(max_stop, adaptive_stop))
+
+
+def _check_tiered_profit_scaling(pos, quotes_by_symbol: Dict[str, Dict[str, Any]], logic_config: dict, db) -> List[Dict[str, Any]]:
+    """Check if any profit tiers have been hit and execute partial closes."""
+    tier_cfg = logic_config.get("tiered_profit_scaling", {})
+    if not tier_cfg.get("enabled", False):
+        return []
+    
+    actions = []
+    current_price = _resolve_position_market_price(pos, quotes_by_symbol)
+    if current_price <= 0:
+        return actions
+    
+    entry_price = float(getattr(pos, "entry_price", 0.0) or 0.0)
+    if entry_price <= 0:
+        return actions
+    
+    signal_type = str(getattr(pos, "signal_type", "") or "").upper()
+    pnl_pct = _directional_return_pct(signal_type, entry_price, current_price)
+    
+    # Get or initialize taken tiers
+    taken_tiers = getattr(pos, "profit_tiers_taken", None) or []
+    
+    for tier in tier_cfg.get("tiers", []):
+        tier_pnl = float(tier.get("pnl_pct", 0.0))
+        if pnl_pct >= tier_pnl and tier_pnl not in taken_tiers:
+            # Execute partial close
+            sell_fraction = float(tier.get("sell_fraction", 0.0))
+            close_amount = float(pos.amount or 0.0) * sell_fraction
+            
+            if close_amount > 0:
+                # Partial close logic
+                remaining_amount = float(pos.amount or 0.0) - close_amount
+                realized_pnl = _directional_pnl(signal_type, entry_price, current_price, close_amount)
+                
+                pos.amount = remaining_amount
+                pos.realized_pnl = float(getattr(pos, "realized_pnl", 0.0) or 0.0) + realized_pnl
+                
+                taken_tiers.append(tier_pnl)
+                pos.profit_tiers_taken = taken_tiers
+                
+                actions.append({
+                    "action": "partial_close",
+                    "tier_pnl_pct": tier_pnl,
+                    "close_amount": close_amount,
+                    "remaining_amount": remaining_amount,
+                    "realized_pnl": realized_pnl
+                })
+                print(f"[paper] {getattr(pos, 'underlying', '')} tier {tier_pnl}% hit: closed {close_amount:.2f}, remaining {remaining_amount:.2f}")
+    
+    # If all tiers taken, set tight trailing stop on remainder
+    if len(taken_tiers) >= len(tier_cfg.get("tiers", [])) and not getattr(pos, "trailing_stop_price", None):
+        tighten = float(tier_cfg.get("remainder_trailing_stop_tighten", 0.3))
+        stop_pct = float(logic_config.get("stop_loss_pct", 2.0)) * tighten
+        
+        if signal_type == "LONG":
+            pos.trailing_stop_price = current_price * (1.0 - stop_pct / 100.0)
+        else:
+            pos.trailing_stop_price = current_price * (1.0 + stop_pct / 100.0)
+        
+        print(f"[paper] {getattr(pos, 'underlying', '')} all tiers taken: tight trailing stop set at {pos.trailing_stop_price:.2f}")
+    
+    return actions
+
+
 def _resolve_position_market_price(open_pos, quotes_by_symbol: Dict[str, Dict[str, Any]]) -> float:
     """Price an existing position using its current execution ticker, not an incoming replacement ticker."""
     if open_pos is None:
         return 0.0
-    price_data = (
-        quotes_by_symbol.get(str(getattr(open_pos, "execution_ticker", "") or "").upper())
-        or quotes_by_symbol.get(str(getattr(open_pos, "underlying", "") or "").upper())
-        or {}
-    )
+    execution_ticker = str(getattr(open_pos, "execution_ticker", "") or "").upper()
+    underlying = str(getattr(open_pos, "underlying", "") or "").upper()
+    price_data = quotes_by_symbol.get(execution_ticker) or {}
+    if not price_data and execution_ticker != underlying:
+        # execution_ticker not in quotes — try to fetch its price directly
+        try:
+            from services.data_ingestion.yfinance_client import PriceClient
+            pc = PriceClient()
+            price_df = pc.get_ohlcv_data_range(
+                symbol=execution_ticker,
+                start=datetime.now(timezone.utc) - timedelta(minutes=30),
+                end=datetime.now(timezone.utc),
+                interval="15m",
+            )
+            if price_df is not None and not price_df.empty and "Close" in price_df.columns:
+                current_price = float(price_df["Close"].iloc[-1])
+                price_data = {"current_price": current_price, "price": current_price}
+        except Exception:
+            pass
+    if not price_data and execution_ticker == underlying:
+        # Last resort: only if no ticker mapping (execution_ticker == underlying)
+        price_data = quotes_by_symbol.get(underlying) or {}
     return float(price_data.get("current_price") or price_data.get("price") or 0.0)
 
 
@@ -753,7 +859,31 @@ def process_signals(
             continue
         _cron_overlap_keys[_overlap_key] = _now_utc
 
-        price_data = quotes_by_symbol.get(execution_ticker) or quotes_by_symbol.get(underlying) or {}
+        # Get price for the execution ticker (the actual security being traded).
+        # If execution_ticker differs from underlying (e.g. PSQ for NVDA SHORT),
+        # we MUST use execution_ticker's price, not underlying's price.
+        price_data = quotes_by_symbol.get(execution_ticker) or {}
+        if not price_data:
+            # execution_ticker not in quotes_by_symbol — try to fetch its price directly
+            try:
+                from services.data_ingestion.yfinance_client import PriceClient
+                pc = PriceClient()
+                price_df = pc.get_ohlcv_data_range(
+                    symbol=execution_ticker,
+                    start=datetime.now(timezone.utc) - timedelta(minutes=30),
+                    end=datetime.now(timezone.utc),
+                    interval="15m",
+                )
+                if price_df is not None and not price_df.empty and "Close" in price_df.columns:
+                    current_price = float(price_df["Close"].iloc[-1])
+                    price_data = {"current_price": current_price, "price": current_price}
+                    print(f"[paper] Fetched price for {execution_ticker}: ${current_price:.2f}")
+            except Exception as _price_err:
+                print(f"[paper] Warning: could not fetch price for {execution_ticker}: {_price_err}")
+        if not price_data:
+            # Last resort: only if execution_ticker == underlying (no mapping)
+            if execution_ticker == underlying:
+                price_data = quotes_by_symbol.get(underlying) or {}
         entry_price = float(price_data.get("current_price") or price_data.get("price") or 0.0)
 
         open_positions = (
@@ -809,6 +939,23 @@ def process_signals(
                     continue
                 # Direction flip after stop: fall through to open new position below
                 action_summary["reason"] = "trailing_stop_hit_then_flip"
+
+        # ── Tiered profit scaling check ─────────────────────────────────
+        if open_pos and open_pos.amount and float(open_pos.amount) > 0:
+            _tier_actions = _check_tiered_profit_scaling(open_pos, quotes_by_symbol, _L, db)
+            if _tier_actions:
+                for _tier_action in _tier_actions:
+                    actions.append({
+                        "underlying": underlying,
+                        "execution_ticker": execution_ticker,
+                        "action": "partial_close",
+                        "tier_pnl_pct": _tier_action.get("tier_pnl_pct"),
+                        "close_amount": _tier_action.get("close_amount"),
+                        "remaining_amount": _tier_action.get("remaining_amount"),
+                        "realized_pnl": _tier_action.get("realized_pnl"),
+                        "session": session["label"]
+                    })
+                db.commit()
 
         # ── HOLD signal ───────────────────────────────────────────────────────
         if signal_type == "HOLD":
@@ -1111,7 +1258,12 @@ def process_signals(
         # meant that when sentiment flipped (e.g. LONG→SHORT) the stop-loss was
         # never re-checked, allowing losses to compound.
         if open_pos is not None and existing_pos_price > 0:
-            _stop_loss = _stop_loss_pct_for_config(_app_config)
+            # Use adaptive stop loss if enabled, otherwise use fixed
+            _adaptive_cfg = _L.get("adaptive_stops", {})
+            if _adaptive_cfg.get("enabled", False):
+                _stop_loss = _calculate_adaptive_stop_loss(open_pos, quotes_by_symbol, _L)
+            else:
+                _stop_loss = _stop_loss_pct_for_config(_app_config)
             _take_profit = _take_profit_pct_for_config(_app_config)
             if _stop_loss > 0 or _take_profit > 0:
                 _pnl_pct = _directional_return_pct(open_pos.signal_type, float(open_pos.entry_price or 0), existing_pos_price)
