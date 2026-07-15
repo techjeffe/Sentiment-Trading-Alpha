@@ -1,6 +1,6 @@
 # Sentiment Trading Alpha
 
-A geopolitical sentiment pipeline that reads the news, reasons about it with a local (or cloud) LLM, and generates trade recommendations for USO, IBIT, QQQ, and SPY — including leveraged execution tickers when confidence is high enough to warrant it. Runs automatically on a user set schedule (default 30 minutes).
+A geopolitical sentiment pipeline that reads the news, reasons about it with a local (or cloud) LLM, and generates trade recommendations for USO, BITO, IBIT, QQQ, and SPY — including leveraged execution tickers when confidence is high enough to warrant it. Runs automatically on a user set schedule (default 30 minutes).
 
 > **This is experimental software. It is not financial advice.**
 
@@ -56,14 +56,15 @@ Scores are computed in Python from LLM-extracted facts — the model never outpu
 
 The analysis reasons about underlying symbols, but recommendations convert to actual broker-tradable tickers when leverage applies:
 
-| Underlying | Bullish | Bearish |
-|---|---|---|
-| QQQ (3x) | TQQQ | SQQQ |
-| SPY (3x) | SPXL | SPXS |
-| USO (2x) | UCO | SCO |
-| IBIT (2x) | BITU | SBIT |
+| Underlying | Bullish (1x) | Bearish (1x) | Bullish (2x) | Bearish (2x) | Bullish (3x) | Bearish (3x) |
+|---|---|---|---|---|---|---|
+| QQQ | QQQ | QQQ | QLD | QID | TQQQ | SQQQ |
+| SPY | SPY | SPY | SSO | SDS | SPXL | SPXS |
+| USO | USO | USO | UCO | SCO | USOU | USOD |
+| IBIT | IBIT | IBIT | BITU | SBIT | — | — |
+| BITO | BITO | BITO | BITU | SBIT | — | — |
 
-Bitcoin and oil are capped at 2x leverage.
+Leverage is applied based on conviction level and risk profile. QQQ, SPY, and USO support up to 3x; IBIT and BITO are capped at 2x.
 
 ### Architecture
 
@@ -225,7 +226,7 @@ The Admin page is where you configure everything. Changes persist in the databas
 - **Analysis Depth** — Light / Normal / Detailed controls article count per feed and pipeline behavior
 - **Model Orchestration** — Stage 1 (extraction) and Stage 2 (reasoning) model selectors; optional Light Web Research toggle. When using the Cloud LLM backend, model dropdowns include both local and cloud models.
 - **Trading Logic** — session hours, base trade amount, entry threshold, stop loss, take profit, re-entry cooldown, trailing stop behavior, portfolio cap, and strategy feature toggles (continuous entry sizing, regime adaptation, separate hold decay)
-- **Symbols** — enable/disable default symbols (USO, IBIT, QQQ, SPY); add up to 3 custom symbols
+- **Symbols** — enable/disable default symbols (USO, BITO, IBIT, QQQ, SPY); add up to 3 custom symbols
 - **RSS Sources** — enable/disable built-in feeds; add up to 3 custom feeds with display labels
 - **Prompt Overrides** — per-symbol specialist prompt guidance
 - **Scheduling & System** — auto-run cadence, snapshot retention limit, display timezone
