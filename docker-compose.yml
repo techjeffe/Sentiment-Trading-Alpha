@@ -1,0 +1,29 @@
+# ── Sentiment Trading Alpha ──────────────────────────────────────
+# Single container: frontend + backend
+#
+# Quick start:
+#   cp .env.example .env          # Edit your API keys
+#   docker compose up --build     # Build and run
+#   docker compose down           # Stop
+#
+# The .env file is loaded automatically — no extra flags needed.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sentiment-trading
+    ports:
+      - "3000:3000"   # Frontend (Next.js)
+      - "8000:8000"   # Backend (FastAPI)
+    env_file:
+      - .env
+    volumes:
+      - trading-data:/data   # Persist SQLite databases
+    restart: unless-stopped
+    # All variables from .env are injected automatically by Docker Compose
+
+volumes:
+  trading-data:
+    driver: local

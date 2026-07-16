@@ -28,6 +28,101 @@ Open [http://localhost:3000](http://localhost:3000).
 
 That's it. The ingestion worker starts automatically when the backend boots. No database setup, no config file editing. If you want admin token protection, Alpaca integration, Telegram notifications, or custom symbols, see the [Admin Controls](#admin-controls) section.
 
+---
+
+## Docker Deployment (Recommended for Cloud LLM Users)
+
+The easiest way to run Sentiment Trading Alpha with cloud LLMs (OpenAI, OpenRouter, Anthropic, etc.) is using Docker. This packages both the frontend and backend into a single container.
+
+### Prerequisites
+
+- **Docker Desktop** installed and running
+- **API key** from a cloud LLM provider (OpenAI, OpenRouter, etc.)
+
+### Quick Start
+
+1. **Clone and configure:**
+   ```bash
+   git clone https://github.com/yourusername/Sentiment-Trading-Alpha.git
+   cd Sentiment-Trading-Alpha
+   cp .env.example .env
+   ```
+
+2. **Edit `.env` with your API keys:**
+   ```bash
+   # Choose your cloud LLM provider
+   INFERENCE_BACKEND=openai
+   
+   # OpenAI
+   OPENAI_API_KEY=sk-your-key-here
+   OPENAI_BASE_URL=https://api.openai.com/v1
+   OPENAI_MODEL=gpt-4o-mini
+   
+   # OR OpenRouter (access multiple models)
+   # OPENAI_API_KEY=sk-or-v1-your-openrouter-key
+   # OPENAI_BASE_URL=https://openrouter.ai/api/v1
+   # OPENAI_MODEL=openai/gpt-4o-mini
+   
+   # OR Anthropic (via OpenAI-compatible API)
+   # OPENAI_API_KEY=sk-ant-your-key
+   # OPENAI_BASE_URL=https://api.anthropic.com/v1
+   # OPENAI_MODEL=claude-3-5-sonnet-20241022
+   
+   # Set a secure admin token
+   ADMIN_API_TOKEN=$(openssl rand -hex 32)
+   ```
+
+3. **Build and start:**
+   ```bash
+   docker compose up --build
+   ```
+
+4. **Access:**
+   - **Frontend:** [http://localhost:3000](http://localhost:3000)
+   - **Backend API:** [http://localhost:8000](http://localhost:8000)
+   - **API Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
+
+### Stopping
+
+```bash
+docker compose down
+```
+
+To also remove the database volume:
+```bash
+docker compose down -v
+```
+
+### Cloud LLM Configuration
+
+The Docker setup supports any OpenAI-compatible cloud provider:
+
+| Provider | `OPENAI_BASE_URL` | Notes |
+|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | Native support |
+| OpenRouter | `https://openrouter.ai/api/v1` | Access to 200+ models |
+| Anthropic | `https://api.anthropic.com/v1` | Via OpenAI-compatible API |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | Via OpenAI-compatible API |
+| Custom | Your endpoint | Any OpenAI-compatible API |
+
+**Security note:** The backend enforces HTTPS for cloud endpoints. API keys are never stored in the repo — they're passed via environment variables in `.env`.
+
+### Data Persistence
+
+SQLite databases (`trading_system.db`, `decision_log.db`) are persisted in a Docker volume (`trading-data`). Your analysis history and trades survive container restarts.
+
+### Advanced: Customization
+
+Edit `.env` to configure:
+- `FRED_API_KEY` — Free economic data from FRED (recommended for better signals)
+- `TELEGRAM_BOT_TOKEN` — Telegram notifications
+- `CORS_ORIGINS` — Allowed frontend origins
+- `ANALYSIS_MAX_SECONDS` — LLM timeout
+
+See `.env.example` for all available options.
+
+---
+
 For a deeper reference covering the API, schema migrations, position sizing math, validation sources, and other advanced topics, see [REFERENCE.md](REFERENCE.md).
 
 ---

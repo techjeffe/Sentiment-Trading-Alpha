@@ -256,7 +256,8 @@ export default function AlphaPage() {
                 <Tooltip
                   contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }}
                   formatter={(v: number, name: string) => [name === "return_pct" ? `${fmt(v, 2)}%` : fmt(v, 3), name === "return_pct" ? "Return" : "Confidence"]}
-                  content={({ payload }) => {
+                  content={(props: Record<string, unknown>) => {
+                    const { payload } = props as { payload?: Array<{ payload: { symbol: string; event_type: string; confidence: number; return_pct: number } }> };
                     if (!payload?.length) return null;
                     const d = payload[0].payload;
                     return (
