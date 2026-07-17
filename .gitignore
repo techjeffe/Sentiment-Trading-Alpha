@@ -28,6 +28,7 @@ backend/node_modules/
 # Local secrets
 .env
 .env.*
+!.env.example
 *.local
 backend/domain_cookies.json
 
