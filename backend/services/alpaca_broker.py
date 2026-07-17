@@ -1664,6 +1664,7 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
         # ── Available qty check (Option C #3) ────────────────────────────
         # For close orders, use min(paper_shares, available_shares_from_alpaca)
         # and skip if available_shares <= 0 (position held by other orders).
+        # Also skip if available_shares is dust-level (Alpaca requires qty > 0).
         if broker.mode == "live":
             available_shares = _get_available_shares_for_close(broker, symbol)
             if available_shares is not None:
@@ -1676,6 +1677,20 @@ def maybe_execute_alpaca_order(db, paper_trade, event: str, config) -> None:
                         db, paper_id, "sell" if not direct_short else "buy", symbol,
                         None, broker.mode,
                         f"available_shares={available_shares} (position held by other orders)",
+                    )
+                    return
+                # Dust check: skip closes for dust-level quantities
+                _DUST_QTY_THRESHOLD = 0.001
+                if available_shares < _DUST_QTY_THRESHOLD:
+                    print(
+                        f"[alpaca] skipping close for {symbol} (paper_id={paper_id}): "
+                        f"available_shares={available_shares} is dust-level (< {_DUST_QTY_THRESHOLD}) "
+                        f"— treating as already closed"
+                    )
+                    _record_alpaca_order_skip(
+                        db, paper_id, "sell" if not direct_short else "buy", symbol,
+                        None, broker.mode,
+                        f"dust_position (available_shares={available_shares})",
                     )
                     return
                 # Cap shares to available (never sell more than Alpaca allows)

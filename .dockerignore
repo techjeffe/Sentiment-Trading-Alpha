@@ -1,0 +1,51 @@
+# ── Docker ignore (build context = project root) ─────────────────
+
+# Version control
+.git
+.gitignore
+
+# Node / Python artifacts
+node_modules
+frontend/node_modules
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+venvbk
+*.egg-info
+dist
+build
+
+# Next.js build cache (rebuilt inside container)
+frontend/.next
+
+# Databases (persisted via Docker volume)
+*.db
+*.db-shm
+*.db-wal
+
+# Environment / secrets
+.env
+
+# IDE / editor
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker files (not needed inside the image)
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# Documentation
+*.md
+LICENSE
+
+# Testing / misc
+coverage
+.pytest_cache
+.hypothesis

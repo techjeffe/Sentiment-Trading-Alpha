@@ -1657,71 +1657,88 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
 
             if _conflict:
                 _conflict_sym = _conflict.get("symbol", "unknown")
-                _conflict_qty = _conflict.get("qty", "unknown")
-                print(
-                    f"[alpaca] CONFLICT: {_sym} ({_signal_type}) conflicts with live "
-                    f"position {_conflict_sym} (qty={_conflict_qty}) — "
-                    f"retrying close before open (max {_OPEN_RETRY_MAX} attempts)"
-                )
+                _conflict_qty = _conflict.get("qty", 0)
+                
+                # ── Dust position handling ────────────────────────────────
+                # If the conflicting position has dust-level quantity (essentially zero),
+                # treat it as already closed and skip the close attempt.
+                _DUST_QTY_THRESHOLD = 0.001  # shares below this are considered dust
+                _conflict_qty_float = float(_conflict_qty) if _conflict_qty != "unknown" else 0.0
+                
+                if _conflict_qty_float < _DUST_QTY_THRESHOLD:
+                    print(
+                        f"[alpaca] DUST CONFLICT: {_sym} ({_signal_type}) has dust-level "
+                        f"conflict with {_conflict_sym} (qty={_conflict_qty}) — "
+                        f"treating as already closed, proceeding with open"
+                    )
+                    _conflict = None  # Clear the conflict, proceed with open
+                else:
+                    print(
+                        f"[alpaca] CONFLICT: {_sym} ({_signal_type}) conflicts with live "
+                        f"position {_conflict_sym} (qty={_conflict_qty}) — "
+                        f"retrying close before open (max {_OPEN_RETRY_MAX} attempts)"
+                    )
 
-                # Find the paper trade to close (the one with the conflicting ticker)
-                _close_trade = None
-                for ct, ce in unique_closes:
-                    ct_sym = str(getattr(ct, "execution_ticker", "") or "").upper()
-                    if ct_sym == _conflict_sym:
-                        _close_trade = ct
-                        break
-
-                if _close_trade is None:
-                    # No close in this dispatch cycle — try to find it in pending
-                    for pt, pe in pending:
-                        pt_sym = str(getattr(pt, "execution_ticker", "") or "").upper()
-                        if pt_sym == _conflict_sym and pe == "close":
-                            _close_trade = pt
+                if _conflict:
+                    # Find the paper trade to close (the one with the conflicting ticker)
+                    _close_trade = None
+                    for ct, ce in unique_closes:
+                        ct_sym = str(getattr(ct, "execution_ticker", "") or "").upper()
+                        if ct_sym == _conflict_sym:
+                            _close_trade = ct
                             break
 
-                if _close_trade is None:
-                    print(
-                        f"[alpaca] SKIP open {_sym}: conflict with {_conflict_sym} "
-                        f"but no close order found to retry"
-                    )
-                    _skipped_opens += 1
-                    continue
+                    if _close_trade is None:
+                        # No close in this dispatch cycle — try to find it in pending
+                        for pt, pe in pending:
+                            pt_sym = str(getattr(pt, "execution_ticker", "") or "").upper()
+                            if pt_sym == _conflict_sym and pe == "close":
+                                _close_trade = pt
+                                break
 
-                # Retry the close with exponential backoff
-                _close_success = False
-                for attempt in range(1, _OPEN_RETRY_MAX + 1):
-                    try:
-                        _dispatch_close_with_retry(
-                            db, _close_trade, _live_broker, config,
-                            max_retries=1, retry_delay_seconds=0,
+                    if _close_trade is None:
+                        print(
+                            f"[alpaca] SKIP open {_sym}: conflict with {_conflict_sym} "
+                            f"but no close order found to retry"
                         )
-                        # Verify the conflict is resolved
-                        _conflict = _has_conflicting_live_position(_live_broker, _sym, _signal_type)
-                        if not _conflict:
-                            _close_success = True
-                            print(f"[alpaca] close retry {attempt} succeeded for {_conflict_sym}")
-                            break
-                        else:
-                            print(
-                                f"[alpaca] close retry {attempt}/{_OPEN_RETRY_MAX} for "
-                                f"{_conflict_sym} — conflict still present, retrying in {_OPEN_RETRY_DELAY}s"
+                        _skipped_opens += 1
+                        continue
+
+                    # Retry the close with exponential backoff
+                    _close_success = False
+                    for attempt in range(1, _OPEN_RETRY_MAX + 1):
+                        try:
+                            _dispatch_close_with_retry(
+                                db, _close_trade, _live_broker, config,
+                                max_retries=1, retry_delay_seconds=0,
                             )
-                    except Exception as _retry_exc:
-                        print(f"[alpaca] close retry {attempt}/{_OPEN_RETRY_MAX} for {_conflict_sym} failed: {_retry_exc}")
+                            # Verify the conflict is resolved
+                            _conflict = _has_conflicting_live_position(_live_broker, _sym, _signal_type)
+                            if not _conflict:
+                                _close_success = True
+                                print(f"[alpaca] close retry {attempt} succeeded for {_conflict_sym}")
+                                break
+                            else:
+                                print(
+                                    f"[alpaca] close retry {attempt}/{_OPEN_RETRY_MAX} for "
+                                    f"{_conflict_sym} — conflict still present, retrying in {_OPEN_RETRY_DELAY}s"
+                                )
+                        except Exception as _retry_exc:
+                            print(f"[alpaca] close retry {attempt}/{_OPEN_RETRY_MAX} for {_conflict_sym} failed: {_retry_exc}")
 
-                    if attempt < _OPEN_RETRY_MAX:
-                        print(f"[alpaca] waiting {_OPEN_RETRY_DELAY}s before next retry...")
-                        import time as _time
-                        _time.sleep(_OPEN_RETRY_DELAY)
+                        if attempt < _OPEN_RETRY_MAX:
+                            print(f"[alpaca] waiting {_OPEN_RETRY_DELAY}s before next retry...")
+                            import time as _time
+                            _time.sleep(_OPEN_RETRY_DELAY)
 
-                if not _close_success:
-                    print(
-                        f"[alpaca] SKIP open {_sym}: all {_OPEN_RETRY_MAX} close retries failed "
-                        f"for {_conflict_sym} — dispatch error recorded"
-                    )
-                    _skipped_opens += 1
-                    continue
+                    if not _close_success:
+                        print(
+                            f"[alpaca] SKIP open {_sym}: all {_OPEN_RETRY_MAX} close retries failed "
+                            f"for {_conflict_sym} — dispatch error recorded"
+                        )
+                        _skipped_opens += 1
+                        continue
+                # else: dust conflict already handled, proceed to open
 
             # No conflict (or conflict resolved) — dispatch the open
             print(f"[alpaca] dispatching open: {_sym} (paper_id={getattr(trade, 'id', '?')})")
