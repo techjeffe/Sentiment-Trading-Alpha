@@ -810,7 +810,9 @@ export default function Home() {
                                                 </p>
                                                 <p className="text-slate-400 mt-1">
                                                     {cloudReachable
-                                                        ? `${config.openai_model || "gpt-4o-mini"} (default cloud model)`
+                                                        ? (config.extraction_model?.trim() && config.reasoning_model?.trim()
+                                                            ? `${config.extraction_model} → ${config.reasoning_model}`
+                                                            : `${config.openai_model || "gpt-4o-mini"} (default cloud model)`)
                                                         : "Save an API key and click ↻ to load available models."}
                                                 </p>
                                             </>
