@@ -72,7 +72,7 @@ if (Test-Path "export_secrets.py") {
         }
     } else {
         Write-Host "  Python not found. Skipping secret export." -ForegroundColor Yellow
-        Write-Host "  You'll need to manually add API keys to .env file." -ForegroundColor Yellow
+        Write-Host "  You will need to manually add API keys to .env file." -ForegroundColor Yellow
     }
 } else {
     Write-Host "  export_secrets.py not found. Skipping secret export." -ForegroundColor Yellow
@@ -219,7 +219,7 @@ Write-Host "  2. Access frontend: http://localhost:3000"
 Write-Host "  3. Access backend API: http://localhost:8000/docs"
 Write-Host ""
 Write-Host "If you had existing secrets in keyring:" -ForegroundColor Yellow
-Write-Host "  - They've been added to your .env file"
+Write-Host "  - They have been added to your .env file"
 Write-Host "  - Docker will use these instead of keyring"
 Write-Host "  - Your original keyring data is unchanged"
 Write-Host ""
