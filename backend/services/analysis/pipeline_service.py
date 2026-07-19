@@ -493,7 +493,16 @@ class PipelineService:
         extraction_model = str(getattr(config, "extraction_model", "") or "").strip()
         legacy_model = str(getattr(config, "analysis_model", "") or "").strip()
         env_model = str(os.getenv("OLLAMA_MODEL", "") or "").strip()
-        return reasoning_model or extraction_model or legacy_model or env_model or "unknown"
+        # NEW: Also check backend-specific model env vars
+        if self.inference_backend == "openai":
+            openai_model = str(os.getenv("OPENAI_MODEL", "") or "").strip()
+            return reasoning_model or extraction_model or legacy_model or openai_model or env_model or "unknown"
+        elif self.inference_backend == "vllm":
+            vllm_model = str(os.getenv("VLLM_MODEL", "") or "").strip()
+            return reasoning_model or extraction_model or legacy_model or vllm_model or env_model or "unknown"
+        else:
+            # For o llama: use OLLAMA_MODEL env var or config
+            return reasoning_model or extraction_model or legacy_model or env_model or "unknown"
 
     def _apply_request_defaults(self, request: AnalysisRequest, config: Any) -> AnalysisRequest:
         return request
