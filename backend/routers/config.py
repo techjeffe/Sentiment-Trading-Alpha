@@ -122,7 +122,7 @@ def _merge_models_with_label(local: List[str], cloud: List[str]) -> List[str]:
 
 @router.get("/config", tags=["Config"])
 async def get_config(
-    _admin: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     config = get_or_create_app_config(db)
     payload = config_to_dict_with_stats(db, config)
