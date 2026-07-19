@@ -61,7 +61,7 @@ The easiest way to run Sentiment Trading Alpha with cloud LLMs (OpenAI, OpenRout
    # OR OpenRouter (access multiple models)
    # OPENAI_API_KEY=sk-or-v1-your-openrouter-key
    # OPENAI_BASE_URL=https://openrouter.ai/api/v1
-   # OPENAI_MODEL=openai/gpt-4o-mini
+   # OPENAI_MODEL=google/gemma-4-31b-it:free
    
    # OR Anthropic (via OpenAI-compatible API)
    # OPENAI_API_KEY=sk-ant-your-key
