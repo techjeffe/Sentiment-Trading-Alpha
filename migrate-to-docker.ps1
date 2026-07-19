@@ -26,16 +26,16 @@ Write-Host "Step 1: Checking for existing databases..." -ForegroundColor Yellow
 
 $DB_FOUND = $false
 if (Test-Path "trading_system.db") {
-    Write-Host "  ✓ Found trading_system.db"
+    Write-Host "  Found trading_system.db"
     $DB_FOUND = $true
 }
 if (Test-Path "decision_log.db") {
-    Write-Host "  ✓ Found decision_log.db"
+    Write-Host "  Found decision_log.db"
     $DB_FOUND = $true
 }
 
 if (-not $DB_FOUND) {
-    Write-Host "  ⚠ No existing databases found in project root." -ForegroundColor Yellow
+    Write-Host "  No existing databases found in project root." -ForegroundColor Yellow
     Write-Host "  Docker will create fresh databases on first run."
 }
 
@@ -49,66 +49,33 @@ $SECRETS_FOUND = $false
 # Create/truncate the export file
 "" | Out-File -FilePath $EXPORT_ENV_FILE -NoNewline
 
-# Try to export secrets using Python
-$PythonCmd = Get-Command python -ErrorAction SilentlyContinue
-if (-not $PythonCmd) {
-    $PythonCmd = Get-Command python3 -ErrorAction SilentlyContinue
-}
-
-if ($PythonCmd) {
-    Write-Host "  Using Python: $($PythonCmd.Name)"
-
-    # Export secrets using Python
-    $PythonScript = @"
-import sys
-try:
-    import keyring
-
-    SECRETS = {
-        "telegram_bot_token": "TELEGRAM_BOT_TOKEN",
-        "telegram_chat_id": "TELEGRAM_CHAT_ID",
-        "telegram_authorized_user_id": "TELEGRAM_AUTHORIZED_USER_ID",
-        "alpaca_paper_api_key": "ALPACA_PAPER_API_KEY",
-        "alpaca_paper_secret_key": "ALPACA_PAPER_SECRET_KEY",
-        "alpaca_live_api_key": "ALPACA_LIVE_API_KEY",
-        "alpaca_live_secret_key": "ALPACA_LIVE_SECRET_KEY",
-        "openai_api_key": "OPENAI_API_KEY",
-        "anthropic_api_key": "ANTHROPIC_API_KEY",
-        "openrouter_api_key": "OPENROUTER_API_KEY",
-        "google_api_key": "GOOGLE_API_KEY",
+# Check if export_secrets.py exists
+if (Test-Path "export_secrets.py") {
+    # Try to export secrets using the external Python script
+    $PythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $PythonCmd) {
+        $PythonCmd = Get-Command python3 -ErrorAction SilentlyContinue
     }
 
-    SERVICE_NAME = "qwen-3.5-9b-getrich"
+    if ($PythonCmd) {
+        Write-Host "  Using Python: $($PythonCmd.Name)"
 
-    with open(".env.docker.migrated", "a") as f:
-        for key, env_var in SECRETS.items():
-            try:
-                value = keyring.get_password(SERVICE_NAME, key)
-                if value:
-                    f.write(f"{env_var}={value}\n")
-                    print(f"  ✓ Exported {env_var}")
-            except Exception:
-                pass
+        # Run the export script
+        & $PythonCmd.Name "export_secrets.py" 2>&1 | Write-Host
 
-    print("  Secret export complete.")
-
-except ImportError:
-    print("  ⚠ keyring package not installed. Skipping secret export.")
-    print("  You'll need to manually add secrets to .env file.")
-except Exception as e:
-    print(f"  ⚠ Error exporting secrets: {e}")
-"@
-
-    $PythonScript | Out-File -FilePath "export_secrets.py" -Encoding UTF8
-    python export_secrets.py
-    Remove-Item "export_secrets.py" -ErrorAction SilentlyContinue
-
-    if (Test-Path $EXPORT_ENV_FILE) {
-        $SECRETS_FOUND = $true
-        Write-Host "  ✓ Secrets exported to $EXPORT_ENV_FILE"
+        if (Test-Path $EXPORT_ENV_FILE) {
+            $Content = Get-Content $EXPORT_ENV_FILE -Raw
+            if ($Content -and $Content.Trim().Length -gt 0) {
+                $SECRETS_FOUND = $true
+                Write-Host "  Secrets exported to $EXPORT_ENV_FILE" -ForegroundColor Green
+            }
+        }
+    } else {
+        Write-Host "  Python not found. Skipping secret export." -ForegroundColor Yellow
+        Write-Host "  You'll need to manually add API keys to .env file." -ForegroundColor Yellow
     }
 } else {
-    Write-Host "  ⚠ Python not found. Skipping secret export." -ForegroundColor Yellow
+    Write-Host "  export_secrets.py not found. Skipping secret export." -ForegroundColor Yellow
 }
 
 # ── Step 3: Merge secrets into .env ─────────────────────────────────────────
@@ -120,13 +87,13 @@ if ($SECRETS_FOUND) {
     if (Test-Path ".env") {
         $BackupName = ".env.backup." + (Get-Date -Format "yyyyMMdd_HHmmss")
         Copy-Item ".env" $BackupName
-        Write-Host "  ✓ Backed up existing .env file to $BackupName"
+        Write-Host "  Backed up existing .env file to $BackupName" -ForegroundColor Green
     }
 
     # Copy .env.example if no .env exists
     if (-not (Test-Path ".env") -and (Test-Path ".env.example")) {
         Copy-Item ".env.example" ".env"
-        Write-Host "  ✓ Created .env from .env.example"
+        Write-Host "  Created .env from .env.example" -ForegroundColor Green
     }
 
     # Merge exported secrets into .env (only if not already set)
@@ -138,10 +105,10 @@ if ($SECRETS_FOUND) {
             if ($Key -and $Value) {
                 # Check if key already exists in .env
                 if (Select-String -Path ".env" -Pattern "^$Key=" -Quiet) {
-                    Write-Host "  - $Key already exists in .env (keeping existing)"
+                    Write-Host "  $Key already exists in .env (keeping existing)" -ForegroundColor Yellow
                 } else {
                     Add-Content -Path ".env" -Value "$Key=$Value"
-                    Write-Host "  ✓ Added $Key to .env"
+                    Write-Host "  Added $Key to .env" -ForegroundColor Green
                 }
             }
         }
@@ -162,7 +129,7 @@ if (docker compose version 2>$null) {
 } elseif (docker-compose version 2>$null) {
     $COMPOSE_CMD = "docker-compose"
 } else {
-    Write-Host "  ✗ Docker Compose not found. Please install Docker Compose." -ForegroundColor Red
+    Write-Host "  Docker Compose not found. Please install Docker Compose." -ForegroundColor Red
     exit 1
 }
 
@@ -172,9 +139,9 @@ Write-Host "  Using: $COMPOSE_CMD" -ForegroundColor Gray
 $ContainersRunning = Invoke-Expression "$COMPOSE_CMD ps -q" 2>$null
 if ($ContainersRunning) {
     Invoke-Expression "$COMPOSE_CMD down"
-    Write-Host "  ✓ Docker containers stopped"
+    Write-Host "  Docker containers stopped" -ForegroundColor Green
 } else {
-    Write-Host "  - No running containers found"
+    Write-Host "  No running containers found"
 }
 
 # ── Step 5: Copy databases into Docker volume ───────────────────────────────
@@ -183,9 +150,9 @@ Write-Host "Step 5: Copying databases into Docker volume..." -ForegroundColor Ye
 
 if ($DB_FOUND) {
     # Ensure Docker is running
-    $DockerRunning = docker info 2>&1
+    docker info 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ✗ Docker is not running. Please start Docker Desktop first." -ForegroundColor Red
+        Write-Host "  Docker is not running. Please start Docker Desktop first." -ForegroundColor Red
         exit 1
     }
 
@@ -199,9 +166,9 @@ if ($DB_FOUND) {
         Write-Host "  Copying trading_system.db..."
         docker cp trading_system.db sentiment-trading:/data/trading_system.db 2>$null
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "  ✓ Copied trading_system.db to Docker volume"
+            Write-Host "  Copied trading_system.db to Docker volume" -ForegroundColor Green
         } else {
-            Write-Host "  ✗ Failed to copy trading_system.db" -ForegroundColor Red
+            Write-Host "  Failed to copy trading_system.db" -ForegroundColor Red
         }
     }
 
@@ -209,16 +176,16 @@ if ($DB_FOUND) {
         Write-Host "  Copying decision_log.db..."
         docker cp decision_log.db sentiment-trading:/data/decision_log.db 2>$null
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "  ✓ Copied decision_log.db to Docker volume"
+            Write-Host "  Copied decision_log.db to Docker volume" -ForegroundColor Green
         } else {
-            Write-Host "  ✗ Failed to copy decision_log.db" -ForegroundColor Red
+            Write-Host "  Failed to copy decision_log.db" -ForegroundColor Red
         }
     }
 
     # Stop temporary containers
     Invoke-Expression "$COMPOSE_CMD down" 2>$null
 } else {
-    Write-Host "  - No databases to copy"
+    Write-Host "  No databases to copy"
 }
 
 # ── Step 6: Start Docker with migrated data ─────────────────────────────────
@@ -234,7 +201,7 @@ $RetryCount = 0
 while ($RetryCount -lt 15) {
     $ContainerRunning = docker ps | Select-String "sentiment-trading"
     if ($ContainerRunning) {
-        Write-Host "  ✓ Container is running"
+        Write-Host "  Container is running" -ForegroundColor Green
         break
     }
     Start-Sleep -Seconds 2

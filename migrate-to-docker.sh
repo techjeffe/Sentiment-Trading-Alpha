@@ -68,67 +68,33 @@ SECRETS_FOUND=false
 # Create/truncate the export file
 > "$EXPORT_ENV_FILE"
 
-# Try to export secrets using Python
-# Check for Python (try multiple names for cross-platform compatibility)
-PYTHON_CMD=""
-for cmd in python3 python /usr/bin/python3 /usr/local/bin/python3; do
-    if command -v "$cmd" &> /dev/null; then
-        PYTHON_CMD="$cmd"
-        break
-    fi
-done
+# Try to export secrets using the external Python script
+if [[ -f "export_secrets.py" ]]; then
+    # Check for Python (try multiple names for cross-platform compatibility)
+    PYTHON_CMD=""
+    for cmd in python3 python /usr/bin/python3 /usr/local/bin/python3; do
+        if command -v "$cmd" &> /dev/null; then
+            PYTHON_CMD="$cmd"
+            break
+        fi
+    done
 
-if [[ -n "$PYTHON_CMD" ]]; then
-
-    echo "  Using Python: $PYTHON_CMD"
-
-    # Export secrets to temp file
-    $PYTHON_CMD << 'PYTHON_EOF'
-import sys
-try:
-    import keyring
-
-    SECRETS = {
-        "telegram_bot_token": "TELEGRAM_BOT_TOKEN",
-        "telegram_chat_id": "TELEGRAM_CHAT_ID",
-        "telegram_authorized_user_id": "TELEGRAM_AUTHORIZED_USER_ID",
-        "alpaca_paper_api_key": "ALPACA_PAPER_API_KEY",
-        "alpaca_paper_secret_key": "ALPACA_PAPER_SECRET_KEY",
-        "alpaca_live_api_key": "ALPACA_LIVE_API_KEY",
-        "alpaca_live_secret_key": "ALPACA_LIVE_SECRET_KEY",
-        "openai_api_key": "OPENAI_API_KEY",
-        "anthropic_api_key": "ANTHROPIC_API_KEY",
-        "openrouter_api_key": "OPENROUTER_API_KEY",
-        "google_api_key": "GOOGLE_API_KEY",
-    }
-
-    SERVICE_NAME = "qwen-3.5-9b-getrich"
-
-    with open(".env.docker.migrated", "a") as f:
-        for key, env_var in SECRETS.items():
-            try:
-                value = keyring.get_password(SERVICE_NAME, key)
-                if value:
-                    f.write(f"{env_var}={value}\n")
-                    print(f"  ✓ Exported {env_var}")
-            except Exception:
-                pass
-
-    print("  Secret export complete.")
-
-except ImportError:
-    print("  ⚠ keyring package not installed. Skipping secret export.")
-    print("  You'll need to manually add secrets to .env file.")
-except Exception as e:
-    print(f"  ⚠ Error exporting secrets: {e}")
-PYTHON_EOF
-
-    if [ -s "$EXPORT_ENV_FILE" ]; then
-        SECRETS_FOUND=true
-        echo "  ✓ Secrets exported to $EXPORT_ENV_FILE"
+    if [[ -n "$PYTHON_CMD" ]]; then
+        echo "  Using Python: $PYTHON_CMD"
+        
+        # Run the export script
+        $PYTHON_CMD export_secrets.py 2>&1
+        
+        if [[ -s "$EXPORT_ENV_FILE" ]]; then
+            SECRETS_FOUND=true
+            echo "  Secrets exported to $EXPORT_ENV_FILE"
+        fi
+    else
+        echo "  Python not found. Skipping secret export."
+        echo "  You'll need to manually add API keys to .env file."
     fi
 else
-    echo "  ⚠ Python not found. Skipping secret export."
+    echo "  export_secrets.py not found. Skipping secret export."
 fi
 
 # ── Step 3: Merge secrets into .env ─────────────────────────────────────────
