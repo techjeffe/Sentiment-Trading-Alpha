@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
+import os
 import socket
 import sqlite3
 from typing import Any, Dict, List, Optional
@@ -577,10 +578,68 @@ def _maybe_import_legacy_app_config(db: Session) -> AppConfig | None:
     return config
 
 
+def _apply_env_overrides(config: AppConfig, db: Session) -> bool:
+    """Apply environment variable overrides to config (Docker-friendly)."""
+    changed = False
+    
+    # INFERENCE_BACKEND: "ollama" | "vllm" | "openai"
+    env_backend = os.getenv("INFERENCE_BACKEND", "").strip().lower()
+    if env_backend and env_backend in VALID_INFERENCE_BACKENDS:
+        if getattr(config, "inference_backend", "") != env_backend:
+            config.inference_backend = env_backend
+            changed = True
+    
+    # OPENAI_API_KEY (already handled by secret_store fallback, but ensure backend is set)
+    if env_backend == "openai" and os.getenv("OPENAI_API_KEY"):
+        if getattr(config, "cloud_provider", "") != "openai":
+            config.cloud_provider = "openai"
+            changed = True
+    
+    # OPENAI_BASE_URL
+    env_openai_url = os.getenv("OPENAI_BASE_URL", "").strip()
+    if env_openai_url:
+        from services.openai_client import _validate_base_url as _validate_openai_url
+        try:
+            normalized = _validate_openai_url(env_openai_url)
+            if getattr(config, "openai_base_url", "") != normalized:
+                config.openai_base_url = normalized
+                changed = True
+        except ValueError:
+            pass
+    
+    # OPENAI_MODEL
+    env_openai_model = os.getenv("OPENAI_MODEL", "").strip()
+    if env_openai_model:
+        if getattr(config, "openai_model", "") != env_openai_model:
+            config.openai_model = env_openai_model
+            changed = True
+    
+    # OLLAMA_URL (for Docker pointing to host)
+    env_ollama_url = os.getenv("OLLAMA_URL", "").strip()
+    if env_ollama_url:
+        # Convert OLLAMA_URL to full API endpoint if needed
+        if not env_ollama_url.endswith("/api/generate"):
+            full_url = env_ollama_url.rstrip("/") + "/api/generate"
+        else:
+            full_url = env_ollama_url
+        if getattr(config, "ollama_url", "") != full_url:
+            config.ollama_url = full_url
+            changed = True
+    
+    if changed:
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+    return changed
+
+
 def get_or_create_app_config(db: Session) -> AppConfig:
     config = db.query(AppConfig).filter(AppConfig.id == 1).first()
     if config:
         changed = False
+        
+        # Apply environment variable overrides (Docker-friendly)
+        changed = _apply_env_overrides(config, db) or changed
         normalized_auto_run_enabled = _coerce_bool(getattr(config, "auto_run_enabled", True), True)
         if getattr(config, "auto_run_enabled", None) != normalized_auto_run_enabled:
             config.auto_run_enabled = normalized_auto_run_enabled
@@ -845,6 +904,7 @@ def get_or_create_app_config(db: Session) -> AppConfig:
     db.add(config)
     db.commit()
     db.refresh(config)
+    _apply_env_overrides(config, db)
     return config
 
 

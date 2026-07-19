@@ -5,6 +5,7 @@ Uses Windows Credential Manager on Windows and Keychain Access on macOS via keyr
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 
 
@@ -70,9 +71,36 @@ def _mask_secret(value: Optional[str], *, keep: int = 3) -> str:
 
 
 def _read_secret(key: str) -> str:
-    keyring = _get_keyring_module()
-    value = keyring.get_password(SECRET_SERVICE_NAME, key)
-    return str(value or "").strip()
+    """Read a secret from keyring, falling back to environment variable."""
+    # Try keyring first (non-Docker / local development)
+    try:
+        keyring = _get_keyring_module()
+        value = keyring.get_password(SECRET_SERVICE_NAME, key)
+        if value:
+            return str(value).strip()
+    except Exception:
+        pass  # Keyring unavailable (e.g., Docker), fall through to env var
+
+    # Fallback: read from environment variable
+    # Map keyring keys to env var names (uppercase, underscore-separated)
+    env_var_map = {
+        TELEGRAM_BOT_TOKEN_KEY: "TELEGRAM_BOT_TOKEN",
+        TELEGRAM_CHAT_ID_KEY: "TELEGRAM_CHAT_ID",
+        TELEGRAM_AUTHORIZED_USER_ID_KEY: "TELEGRAM_AUTHORIZED_USER_ID",
+        ALPACA_PAPER_API_KEY_KEY: "ALPACA_PAPER_API_KEY",
+        ALPACA_PAPER_SECRET_KEY_KEY: "ALPACA_PAPER_SECRET_KEY",
+        ALPACA_LIVE_API_KEY_KEY: "ALPACA_LIVE_API_KEY",
+        ALPACA_LIVE_SECRET_KEY_KEY: "ALPACA_LIVE_SECRET_KEY",
+        ALPACA_API_KEY_KEY: "ALPACA_API_KEY",
+        ALPACA_SECRET_KEY_KEY: "ALPACA_SECRET_KEY",
+        OPENAI_API_KEY_KEY: "OPENAI_API_KEY",
+        CLOUD_API_KEY_KEYS["anthropic"]: "ANTHROPIC_API_KEY",
+        CLOUD_API_KEY_KEYS["openrouter"]: "OPENROUTER_API_KEY",
+        CLOUD_API_KEY_KEYS["google"]: "GOOGLE_API_KEY",
+        CLOUD_API_KEY_KEYS["custom"]: "CUSTOM_API_KEY",
+    }
+    env_var = env_var_map.get(key, key.upper())
+    return os.getenv(env_var, "").strip()
 
 
 def _write_secret(key: str, value: str) -> None:

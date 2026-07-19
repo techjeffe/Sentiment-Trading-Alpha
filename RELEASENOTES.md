@@ -1,3 +1,68 @@
+# Release Notes — July 19, 2026
+
+## Fix: Docker Deployment — Multiple Issues Resolved
+
+Fixed three critical issues that prevented the Docker container from starting and correctly using cloud LLM providers.
+
+### 1. `start.sh` Line Ending Issues (Container Would Not Start)
+**Problem:** The `start.sh` script had Windows CRLF line endings, causing the container to fail with `exec /app/start.sh: no such file or directory`.
+
+**Root cause:** The shebang `#!/bin/bash\r` (with carriage return) was interpreted as `/bin/bash\r` which doesn't exist.
+
+**Fix:** Converted `start.sh` to Unix LF line endings using `tr -d '\r'`.
+
+**Impact:** Docker container now starts correctly.
+
+---
+
+### 2. Keyring/Secret Storage Failed in Docker
+**Problem:** The `secret_store.py` module exclusively used the `keyring` package for secure secret storage. Docker containers don't have a secure keyring backend (no D-Bus, no Windows Credential Manager), causing `keyring.errors.NoKeyringError` on startup.
+
+**Root cause:** The `keyring` package requires a platform-specific backend that isn't available in minimal Docker containers.
+
+**Fix:** Modified `backend/services/secret_store.py` to:
+- Try keyring first (non-Docker / local development)
+- Fall back to environment variables when keyring is unavailable (Docker)
+- Added environment variable mappings for all secret keys (Telegram, Alpaca, OpenAI, etc.)
+
+**Impact:** 
+- Docker users: Secrets are read from `.env` file via `env_file` in `docker-compose.yml`
+- Non-Docker users: Continue using keyring as before (no behavior change)
+- Both environments: Can use `.env` for secrets if keyring is not configured
+
+---
+
+### 3. `INFERENCE_BACKEND` Environment Variable Not Applied
+**Problem:** Despite setting `INFERENCE_BACKEND=openai` in `.env`, the application defaulted to Ollama because the database config (defaulting to "ollama") was never updated from environment variables.
+
+**Root cause:** The `get_or_create_app_config()` function in `app_config.py` created/loaded config from the database with `inference_backend` defaulting to "ollama", but never read the `INFERENCE_BACKEND` environment variable to override it.
+
+**Fix:** Added `_apply_env_overrides()` function in `backend/services/app_config.py` that:
+- Reads `INFERENCE_BACKEND`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OLLAMA_URL` from environment variables
+- Applies them to the database config at startup
+- Called from `get_or_create_app_config()` for all config creation paths (new, existing, and legacy import)
+- Added `import os` to module imports
+
+**Impact:**
+- Docker users: `INFERENCE_BACKEND` in `.env` now correctly overrides database defaults
+- Non-Docker users: No change in behavior (env vars are optional)
+- Both environments: Environment variables take precedence over database defaults
+
+---
+
+### Files Changed
+- `start.sh` — Fixed line endings (CRLF → LF)
+- `backend/services/secret_store.py` — Added environment variable fallback for keyring
+- `backend/services/app_config.py` — Added `_apply_env_overrides()` for Docker env var support
+
+### Backwards Compatibility
+All changes are backwards compatible:
+- **Non-Docker users:** No behavior change. Keyring continues to work as before. Environment variables are optional.
+- **Docker users:** Now works correctly with cloud LLMs and environment variable-based secrets.
+- **Existing databases:** Environment variables override defaults only if explicitly set.
+
+---
+
 # Release Notes — July 16, 2026
 
 ## Feature: Docker Deployment — Single Container Setup for Cloud LLM Users
