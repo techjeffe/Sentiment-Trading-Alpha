@@ -106,9 +106,6 @@ class SentimentService:
         stage_metrics: Dict[str, Dict[str, Any]] = {}
 
         stage1_model = extraction_model or model_name
-        print(f"DEBUG SentimentService.analyze_sentiment: stage1_model={stage1_model!r}", flush=True)
-        print(f"DEBUG SentimentService.analyze_sentiment: reasoning_model={reasoning_model!r}", flush=True)
-        print(f"DEBUG SentimentService.analyze_sentiment: model_name={model_name!r}", flush=True)
         if stage1_model:
             stage1_started = time.time()
             print(f"Stage 1: starting keyword gen for {len(symbols)} symbols (model={stage1_model})...")

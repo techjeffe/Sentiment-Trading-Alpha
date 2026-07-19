@@ -582,7 +582,6 @@ def _apply_env_overrides(config: AppConfig, db: Session) -> bool:
     """Apply environment variable overrides to config (Docker-friendly)."""
     changed = False
     
-    print(f"DEBUG _apply_env_overrides: called")
     
     # INFERENCE_BACKEND: "ollama" | "vllm" | "openai"
     env_backend = os.getenv("INFERENCE_BACKEND", "").strip().lower()

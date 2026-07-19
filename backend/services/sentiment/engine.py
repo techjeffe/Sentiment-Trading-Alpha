@@ -259,10 +259,6 @@ class SentimentEngine:
             # For Ollama: use OLLAMA_MODEL env var or config
             self.model_name = (model_name or self.MODEL_NAME or "").strip()
         
-        print(f"DEBUG SentimentEngine.__init__: inference_backend={self.inference_backend!r}")
-        print(f"DEBUG SentimentEngine.__init__: model_name={self.model_name!r}")
-        print(f"DEBUG SentimentEngine.__init__: OPENAI_MODEL={self.OPENAI_MODEL!r}")
-        
         self.session = requests.Session()
         self._cache = {}
         # self.inference_backend already set above (line ~237)
@@ -1490,12 +1486,7 @@ class SentimentEngine:
         effective_base_url = (self.OPENAI_BASE_URL or "https://api.openai.com/v1").strip()
         effective_max_tokens = max_tokens if max_tokens is not None else self.MAX_TOKENS
 
-        # DEBUG: Print model resolution
-        print(f"DEBUG _call_openai_sync: model_override={model_override!r}")
-        print(f"DEBUG _call_openai_sync: self.OPENAI_MODEL={self.OPENAI_MODEL!r}")
-        print(f"DEBUG _call_openai_sync: effective_model={effective_model!r}")
         
-        print(f"SentimentEngine → cloud backend: model={effective_model}, base_url={effective_base_url}, api_key={'configured' if api_key else 'MISSING'}")
 
         if not api_key:
             raise Exception(
@@ -1512,9 +1503,6 @@ class SentimentEngine:
         # the exact fields we need, just like Ollama's `format` field does.
         # call_openai_chat_sync will attempt json_schema format first, and fall
         # back to force_json if the provider doesn't support it.
-        # DEBUG: log start and end of prompt to verify articles are included
-        print(f"DEBUG _call_openai_sync prompt ({len(prompt)} chars) start: {prompt[:200]}")
-        print(f"DEBUG _call_openai_sync prompt ({len(prompt)} chars) end: {prompt[-400:]}")
         result = call_openai_chat_sync(
             prompt=prompt,
             model=effective_model,
@@ -1526,9 +1514,7 @@ class SentimentEngine:
             temperature=self.TEMPERATURE,
             timeout=180,
         )
-        # DEBUG: log raw response to diagnose cloud model output
         raw = result.get("response", "")
-        print(f"DEBUG _call_openai_sync raw response ({len(raw)} chars): {raw[:600]}")
         return result
 
     def _parse_response(
@@ -1567,7 +1553,6 @@ class SentimentEngine:
         symbol_for_scoring = sym_keys[0] if sym_keys else ""
 
         # Always print a compact debug line with the symbol, regardless of format
-        print(f"DEBUG _parse_response [{symbol_for_scoring or '?'}]: is_extraction_format={is_extraction_format}, data_preview={str(data)[:300]}")
 
         # Determine if we're using a cloud backend for cloud-model-specific overrides
         _is_cloud = getattr(self, "inference_backend", "ollama") in ("openai", "vllm")
@@ -1580,9 +1565,7 @@ class SentimentEngine:
             _sig = (computed or {}).get("signal_type", "")
             _sc = _R if _sig == "SHORT" else _G if _sig == "LONG" else _Y if _sig == "HOLD" else _X
             _scores_str = str(computed).replace(f"'signal_type': '{_sig}'", f"'signal_type': '{_sc}{_sig}{_X}'")
-            print(f"DEBUG _parse_response computed scores for {_B}{symbol_for_scoring}{_X}: {_scores_str}")
         except Exception as e:
-            print(f"DEBUG _parse_response [{symbol_for_scoring or '?'}]: SCORING ERROR — {e}")
             computed = None
 
         if is_extraction_format and computed is not None:
