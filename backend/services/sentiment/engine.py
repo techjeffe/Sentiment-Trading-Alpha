@@ -803,6 +803,8 @@ class SentimentEngine:
     @staticmethod
     def _strip_thinking(text: str) -> str:
         """Remove <think>...</think> blocks emitted by Qwen3 models."""
+        if text is None:
+            return ""
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
     @staticmethod
@@ -1292,6 +1294,8 @@ class SentimentEngine:
         
         Results are cached per model name to avoid redundant regex scans.
         """
+        if not model_name:
+            return False
         global _large_model_re_cache
         if model_name in _large_model_re_cache:
             return _large_model_re_cache[model_name]

@@ -288,11 +288,11 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                 </div>
             )}
 
-            {/* 7. Advanced: parallel Ollama slots */}
+            {/* 7. Advanced: parallel Stage 2 slots */}
             {isAdvancedMode && (
                 <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                     <label className="block">
-                        <span className="text-sm font-semibold text-slate-200">Parallel Ollama slots</span>
+                        <span className="text-sm font-semibold text-slate-200">Parallel Stage 2 slots</span>
                         <p className="mt-1 text-xs text-slate-400 leading-relaxed">
                             Number of Stage 2 specialist calls that may run concurrently. <span className="font-semibold text-slate-200">1</span> = serialized (safe default).
                         </p>
@@ -306,7 +306,7 @@ export function OverviewSection({ config, setConfig, isAdvancedMode, riskOptions
                         />
                         {config.ollama_parallel_slots > 1 && (
                             <p className="mt-2 text-[11px] text-amber-400 leading-relaxed">
-                                ⚠ Requires GPU VRAM headroom AND <code className="font-mono text-amber-300">OLLAMA_NUM_PARALLEL={config.ollama_parallel_slots}</code> set on the Ollama side. Without both, Ollama will OOM or queue silently — undoing the speedup.
+                                ⚠ For local Ollama: requires GPU VRAM headroom AND <code className="font-mono text-amber-300">OLLAMA_NUM_PARALLEL={config.ollama_parallel_slots}</code> set on the Ollama side. For cloud APIs (OpenRouter, OpenAI): safe to increase to 4-8x for faster analysis.
                             </p>
                         )}
                     </label>
