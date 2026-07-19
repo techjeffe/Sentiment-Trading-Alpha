@@ -82,6 +82,12 @@ class PipelineService:
         self.model_name: str = ""
         self.timestamp: str = ""
         self.analysis_id: str = ""
+        
+        # FIX: Set inference_backend so _resolve_active_model_name() works
+        config_obj = get_or_create_app_config(db)
+        self.inference_backend = str(getattr(config_obj, "inference_backend", "") or "").strip().lower()
+        if not self.inference_backend:
+            self.inference_backend = os.getenv("INFERENCE_BACKEND", "olama").strip().lower()
 
     # ── Public API ───────────────────────────────────────────────────
 
