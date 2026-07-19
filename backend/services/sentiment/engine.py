@@ -238,6 +238,9 @@ class SentimentEngine:
         # Only read cloud API key when using the OpenAI-compatible (cloud) backend.
         # Local inference (ollama/vllm) never needs a cloud API key.
         self.OPENAI_API_KEY = ""
+        # FIX: Set inference_backend BEFORE using it in model_name logic
+        self.inference_backend = self.INFERENCE_BACKEND
+        
         if self.INFERENCE_BACKEND == "openai":
             try:
                 from services.secret_store import get_cloud_api_key
@@ -262,7 +265,7 @@ class SentimentEngine:
         
         self.session = requests.Session()
         self._cache = {}
-        self.inference_backend = self.INFERENCE_BACKEND
+        # self.inference_backend already set above (line ~237)
 
     @classmethod
     def set_backend(cls, backend: str) -> None:

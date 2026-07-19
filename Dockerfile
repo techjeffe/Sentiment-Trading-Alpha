@@ -23,7 +23,9 @@ RUN apt-get update && \
 
 # ── 2. Install Python dependencies ──────────────────────────────
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    playwright install chromium && \
+    playwright install-deps chromium
 
 # ── 3. Copy frontend source and build Next.js ───────────────────
 COPY frontend/ ./frontend/
