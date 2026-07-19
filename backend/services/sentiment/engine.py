@@ -245,7 +245,21 @@ class SentimentEngine:
             except Exception:
                 self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 
-        self.model_name = (model_name or self.MODEL_NAME or "").strip()
+        # Model name: prefer explicit parameter, then backend-specific env var, then generic env var
+        if self.inference_backend == "openai":
+            # For OpenAI/cloud: use OPENAI_MODEL env var or config
+            self.model_name = (model_name or os.getenv("OPENAI_MODEL", "").strip()) or ""
+        elif self.inference_backend == "vllm":
+            # For vLLM: use VLLM_MODEL env var or config
+            self.model_name = (model_name or os.getenv("VLLM_MODEL", "").strip()) or ""
+        else:
+            # For Ollama: use OLLAMA_MODEL env var or config
+            self.model_name = (model_name or self.MODEL_NAME or "").strip()
+        
+        print(f"DEBUG SentimentEngine.__init__: inference_backend={self.inference_backend!r}")
+        print(f"DEBUG SentimentEngine.__init__: model_name={self.model_name!r}")
+        print(f"DEBUG SentimentEngine.__init__: OPENAI_MODEL={self.OPENAI_MODEL!r}")
+        
         self.session = requests.Session()
         self._cache = {}
         self.inference_backend = self.INFERENCE_BACKEND
@@ -1469,10 +1483,15 @@ class SentimentEngine:
         if not api_key and self.INFERENCE_BACKEND == "openai":
             api_key = os.getenv("OPENAI_API_KEY", "").strip()
 
-        effective_model = (model_override or self.OPENAI_MODEL or "").strip()
+        effective_model = (model_override or self.model_name or self.OPENAI_MODEL or "").strip()
         effective_base_url = (self.OPENAI_BASE_URL or "https://api.openai.com/v1").strip()
         effective_max_tokens = max_tokens if max_tokens is not None else self.MAX_TOKENS
 
+        # DEBUG: Print model resolution
+        print(f"DEBUG _call_openai_sync: model_override={model_override!r}")
+        print(f"DEBUG _call_openai_sync: self.OPENAI_MODEL={self.OPENAI_MODEL!r}")
+        print(f"DEBUG _call_openai_sync: effective_model={effective_model!r}")
+        
         print(f"SentimentEngine → cloud backend: model={effective_model}, base_url={effective_base_url}, api_key={'configured' if api_key else 'MISSING'}")
 
         if not api_key:
