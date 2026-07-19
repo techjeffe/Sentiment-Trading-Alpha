@@ -149,24 +149,37 @@ echo "Step 5: Copying databases into Docker volume..."
 if [ "$DB_FOUND" = true ]; then
     # Ensure Docker is running
     if ! docker info > /dev/null 2>&1; then
-        echo "  ✗ Docker is not running. Please start Docker Desktop first."
+        echo "  ERROR: Docker is not running. Please start Docker Desktop first."
         exit 1
     fi
 
     # Start containers temporarily to ensure volume exists
     echo "  Ensuring Docker volume exists..."
-    docker compose up -d --no-build 2>/dev/null || docker-compose up -d --no-build 2>/dev/null || true
-    sleep 3
+    $COMPOSE_CMD up -d --no-build 2>/dev/null || docker-compose up -d --no-build 2>/dev/null || true
+    sleep 5
 
-    # Copy databases using docker cp
+    # Copy databases using docker cp - include WAL files if they exist
     if [ -f "trading_system.db" ]; then
         echo "  Copying trading_system.db..."
+        # Stop local processes that might have the database open
+        pkill -f "python.*main.py" 2>/dev/null || true
+        
+        # Copy main database file
         docker cp trading_system.db sentiment-trading:/data/trading_system.db 2>/dev/null || \
         docker cp trading_system.db sentimenttradingalpha-app:/data/trading_system.db 2>/dev/null
+        
+        # Copy WAL files if they exist (important for database integrity)
+        if [ -f "trading_system.db-wal" ]; then
+            docker cp trading_system.db-wal sentiment-trading:/data/trading_system.db-wal 2>/dev/null || true
+        fi
+        if [ -f "trading_system.db-shm" ]; then
+            docker cp trading_system.db-shm sentiment-trading:/data/trading_system.db-shm 2>/dev/null || true
+        fi
+        
         if [ $? -eq 0 ]; then
-            echo "  ✓ Copied trading_system.db to Docker volume"
+            echo "  Copied trading_system.db to Docker volume"
         else
-            echo "  ✗ Failed to copy trading_system.db (container may not be running)"
+            echo "  WARNING: Failed to copy trading_system.db"
         fi
     fi
 
@@ -174,17 +187,29 @@ if [ "$DB_FOUND" = true ]; then
         echo "  Copying decision_log.db..."
         docker cp decision_log.db sentiment-trading:/data/decision_log.db 2>/dev/null || \
         docker cp decision_log.db sentimenttradingalpha-app:/data/decision_log.db 2>/dev/null
+        
+        if [ -f "decision_log.db-wal" ]; then
+            docker cp decision_log.db-wal sentiment-trading:/data/decision_log.db-wal 2>/dev/null || true
+        fi
+        
         if [ $? -eq 0 ]; then
-            echo "  ✓ Copied decision_log.db to Docker volume"
+            echo "  Copied decision_log.db to Docker volume"
         else
-            echo "  ✗ Failed to copy decision_log.db (container may not be running)"
+            echo "  WARNING: Failed to copy decision_log.db"
         fi
     fi
 
     # Stop temporary containers
-    docker compose down 2>/dev/null || docker-compose down 2>/dev/null || true
+    $COMPOSE_CMD down 2>/dev/null || docker-compose down 2>/dev/null || true
+    
+    echo ""
+    echo "  IMPORTANT: If you get 'database disk image is malformed' error:"
+    echo "    1. Stop Docker: docker compose down"
+    echo "    2. Remove corrupted databases from Docker volume"
+    echo "    3. Let Docker create fresh databases on next start"
+    echo "    4. Or manually copy databases after stopping all local Python processes"
 else
-    echo "  - No databases to copy"
+    echo "  No databases to copy"
 fi
 
 # ── Step 6: Start Docker with migrated data ─────────────────────────────────

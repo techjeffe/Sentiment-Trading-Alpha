@@ -1,4 +1,4 @@
-# migrate-to-docker.ps1
+# ── migrate-to-docker.ps1 ──────────────────────────────────────────────────
 # One-time migration script: Import existing databases and secrets into Docker
 
 Write-Host "============================================"
@@ -47,6 +47,8 @@ if (Test-Path "export_secrets.py") {
             if ($Content -and $Content.Trim().Length -gt 0) {
                 $SECRETS_FOUND = $true
                 Write-Host "  Secrets exported to $EXPORT_ENV_FILE" -ForegroundColor Green
+            } else {
+                Write-Host "  No secrets found in keyring" -ForegroundColor Yellow
             }
         }
     } else {
@@ -79,7 +81,7 @@ if ($SECRETS_FOUND) {
 
             if ($Key -and $Value) {
                 if (Select-String -Path ".env" -Pattern "^$Key=" -Quiet) {
-                    Write-Host "  $Key already exists in .env" -ForegroundColor Yellow
+                    Write-Host "  $Key already exists in .env (keeping existing)" -ForegroundColor Yellow
                 } else {
                     Add-Content -Path ".env" -Value "$Key=$Value"
                     Write-Host "  Added $Key to .env" -ForegroundColor Green
@@ -126,23 +128,40 @@ if ($DB_FOUND) {
     Invoke-Expression "$COMPOSE_CMD up -d --no-build" 2>$null
     Start-Sleep -Seconds 5
 
+    # Copy databases - include WAL files
     if (Test-Path "trading_system.db") {
         Write-Host "  Copying trading_system.db..."
         docker cp trading_system.db sentiment-trading:/data/trading_system.db 2>$null
+        if (Test-Path "trading_system.db-wal") {
+            docker cp trading_system.db-wal sentiment-trading:/data/ 2>$null
+        }
         if ($LASTEXITCODE -eq 0) {
             Write-Host "  Copied trading_system.db" -ForegroundColor Green
+        } else {
+            Write-Host "  WARNING: Failed to copy trading_system.db" -ForegroundColor Yellow
         }
     }
 
     if (Test-Path "decision_log.db") {
         Write-Host "  Copying decision_log.db..."
         docker cp decision_log.db sentiment-trading:/data/decision_log.db 2>$null
+        if (Test-Path "decision_log.db-wal") {
+            docker cp decision_log.db-wal sentiment-trading:/data/ 2>$null
+        }
         if ($LASTEXITCODE -eq 0) {
             Write-Host "  Copied decision_log.db" -ForegroundColor Green
+        } else {
+            Write-Host "  WARNING: Failed to copy decision_log.db" -ForegroundColor Yellow
         }
     }
 
     Invoke-Expression "$COMPOSE_CMD down" 2>$null
+    
+    Write-Host ""
+    Write-Host "  IMPORTANT: If you get database errors:" -ForegroundColor Yellow
+    Write-Host "    1. Stop Docker: docker compose down" -ForegroundColor Yellow
+    Write-Host "    2. Remove corrupted databases" -ForegroundColor Yellow
+    Write-Host "    3. Let Docker create fresh databases" -ForegroundColor Yellow
 }
 
 # Step 6: Start Docker with migrated data
