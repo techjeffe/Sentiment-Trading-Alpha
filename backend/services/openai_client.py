@@ -88,6 +88,30 @@ def _validate_base_url(base_url: str) -> str:
     return url
 
 
+def _clean_json_response(content: str) -> str:
+    """Clean LLM response content to extract valid JSON.
+    
+    Strips markdown code blocks, explanatory text, and other non-JSON content
+    that cloud models sometimes wrap around the JSON response.
+    """
+    if not content:
+        return content
+    
+    # Strip markdown code blocks (```json ... ``` or ``` ... ```)
+    content = re.sub(r'```(?:json)?\s*', '', content)
+    content = re.sub(r'\s*```', '', content)
+    
+    # Try to extract JSON object by finding the outermost {}
+    # This handles cases where the model adds text before/after JSON
+    start_idx = content.find('{')
+    end_idx = content.rfind('}')
+    
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        content = content[start_idx:end_idx + 1]
+    
+    return content.strip()
+
+
 def call_openai_chat_sync(
     prompt: str,
     model: str,
@@ -165,6 +189,8 @@ def call_openai_chat_sync(
             choices = data.get("choices", [])
             if choices:
                 content = choices[0].get("message", {}).get("content", "")
+                # Clean the response to extract valid JSON
+                content = _clean_json_response(content)
                 print(f"OpenAI [{model}] completed in {latency:.1f}ms (json_schema) (input={data.get('usage', {}).get('prompt_tokens', '?')}t output={data.get('usage', {}).get('completion_tokens', '?')}t)")
                 return {"response": content}
         except requests.exceptions.HTTPError as e:
@@ -213,6 +239,9 @@ def call_openai_chat_sync(
 
         message = choices[0].get("message", {})
         content = message.get("content", "")
+        
+        # Clean the response to extract valid JSON
+        content = _clean_json_response(content)
 
         print(f"OpenAI [{model}] completed in {latency:.1f}ms (input={data.get('usage', {}).get('prompt_tokens', '?')}t output={data.get('usage', {}).get('completion_tokens', '?')}t)")
 
@@ -252,16 +281,29 @@ def _extract_error_body(e: requests.exceptions.HTTPError) -> str:
 
 
 def _build_chat_messages(prompt: str) -> List[Dict[str, str]]:
-    """Send the entire prompt as a single user message.
-
-    TEMPORARY: Bypassing the system/user split to test if sending the full
-    prompt as a user message (matching how Ollama receives it) fixes the
-    cloud model's tendency to classify everything as noise/UNRELATED.
+    """Build chat messages with a system prompt enforcing JSON-only output.
+    
+    Adds a system message that instructs the model to return ONLY valid JSON,
+    which helps cloud models that don't strictly honor response_format or
+    tend to wrap JSON in markdown/explanation text.
     """
     text = str(prompt or "").strip()
     if not text:
         return [{"role": "user", "content": "Hello."}]
-    return [{"role": "user", "content": text}]
+    
+    # System message to enforce JSON-only output
+    system_message = {
+        "role": "system",
+        "content": (
+            "You are a strict JSON-only generator. You must respond with ONLY raw, valid JSON. "
+            "Do not include markdown formatting, conversational text, introductory statements, "
+            "or explanations. Start your response with { and end with }. "
+            "If you cannot produce valid JSON, return an empty JSON object {}."
+        )
+    }
+    
+    user_message = {"role": "user", "content": text}
+    return [system_message, user_message]
 
 
 def get_openai_status(
