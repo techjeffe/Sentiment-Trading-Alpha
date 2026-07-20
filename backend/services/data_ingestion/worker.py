@@ -268,6 +268,8 @@ def _upsert_scraped_article(
         existing.fast_lane_triggered = bool(existing.fast_lane_triggered or fast_lane_triggered)
         if not existing.content_hash:
             existing.content_hash = content_hash
+        # Update discovered_at to keep article fresh in the 12-hour window
+        existing.discovered_at = _utc_now()
         db.add(existing)
         db.flush()
         return existing, False

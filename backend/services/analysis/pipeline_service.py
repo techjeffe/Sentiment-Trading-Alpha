@@ -328,6 +328,14 @@ class PipelineService:
                     confidence=float(result.get("confidence", 0.0) or 0.0),
                     reasoning=str(result.get("reasoning", "") or ""),
                 )
+            # Build model_inputs for debug visibility into what was sent to the model
+            model_inputs = self._sentiment.build_model_input_debug(
+                posts=posts,
+                price_context=price_context,
+                market_validation=market_validation,
+                symbols=self.symbols,
+                prompt_overrides=prompt_overrides,
+            )
             response = AnalysisResponse(
                 request_id=self.request_id,
                 timestamp=self.timestamp,
@@ -337,6 +345,7 @@ class PipelineService:
                 trading_signal=consensus_signal,
                 stage_metrics=stage_metrics,
                 market_validation=market_validation,
+                model_inputs=model_inputs,
             )
 
             # ── Stage 5: Backtest ────────────────────────────────────────────

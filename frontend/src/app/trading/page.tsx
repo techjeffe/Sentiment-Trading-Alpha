@@ -984,6 +984,7 @@ export default function TradingPage() {
                                                         <th className="px-4 py-2.5 text-right">Qty</th>
                                                         <th className="px-4 py-2.5 text-right">Avg Entry</th>
                                                         <th className="px-4 py-2.5 text-right">Current</th>
+                                                        <th className="px-4 py-2.5 text-right">Holdings</th>
                                                         <th className="px-4 py-2.5 text-right">Unrealized P&L</th>
                                                         <th className="px-4 py-2.5 text-right">Actions</th>
                                                     </tr>
@@ -1006,6 +1007,11 @@ export default function TradingPage() {
                                                                 <td className="px-4 py-3 text-right font-mono text-slate-300">{qtyNum != null ? qtyNum.toFixed(4) : "—"}</td>
                                                                 <td className="px-4 py-3 text-right font-mono text-slate-300">{entryNum != null ? `$${entryNum.toFixed(2)}` : "—"}</td>
                                                                 <td className="px-4 py-3 text-right font-mono text-slate-300">{currentNum != null ? `$${currentNum.toFixed(2)}` : "—"}</td>
+                                                                <td className="px-4 py-3 text-right font-mono text-slate-300">
+                                                                    {qtyNum != null && displayPrice != null
+                                                                        ? `$${(qtyNum * displayPrice).toFixed(2)}`
+                                                                        : "—"}
+                                                                </td>
                                                                 <td className="px-4 py-3 text-right">
                                                                     <span className={`inline-block rounded px-1.5 py-0.5 border text-[10px] font-semibold ${pnlBg(pnlNum ?? 0)}`}>
                                                                         {fmtDollar(pnlNum ?? 0)} ({fmt(pnlPct ?? 0)}%)
