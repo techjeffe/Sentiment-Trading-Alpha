@@ -188,6 +188,38 @@ docker compose up --build
 
 ---
 
+## 📊 Alpha Analytics (/alpha)
+
+The **Alpha Analytics** page is your deep-dive dashboard for understanding system performance and signal quality. Access it at [http://localhost:3000/alpha](http://localhost:3000/alpha) after starting the app.
+
+### What You'll Find:
+
+#### Performance Metrics
+- **Win Rate** — Percentage of profitable signals
+- **Average Return** — Mean return per trade signal
+- **Sharpe Ratio** — Risk-adjusted return metric
+- **Maximum Drawdown** — Largest peak-to-trough decline
+
+#### Signal Quality Analysis
+- **Confidence vs. Outcome** — See if high-confidence signals actually perform better
+- **Asset Performance** — Which ETFs/stocks have the best signal accuracy
+- **Time-based Patterns** — Performance by hour, day, or market session
+
+#### Backtesting Insights
+- **Historical Accuracy** — How past signals would have performed
+- **Regime Analysis** — Performance in bull vs. bear markets
+- **False Positive/Negative Rates** — Understand where the AI struggles
+
+#### Why It Matters:
+- ✅ **Validate the AI** — Ensure signals are actually predictive, not random
+- ✅ **Improve Strategies** — Identify which assets or timeframes work best
+- ✅ **Build Confidence** — See data-backed evidence of system performance
+- ✅ **Optimize Settings** — Use metrics to fine-tune configuration
+
+> 💡 **Pro Tip:** Check Alpha Analytics regularly to ensure the system maintains high signal quality over time. If win rates drop, it may be time to retrain or adjust news sources.
+
+---
+
 ## ⚙️ Configuration (Made Simple)
 
 Everything is configured through a friendly **Admin Web Interface** — no coding required!
