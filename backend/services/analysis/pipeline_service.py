@@ -86,7 +86,9 @@ class PipelineService:
         # FIX: Set inference_backend so _resolve_active_model_name() works
         # Read from config first (set via Admin UI), fall back to env var for Docker
         # This allows both local and cloud LLMs to be configured simultaneously
-        config_backend = getattr(config, "inference_backend", None) or "ollama"
+        from services.app_config import get_or_create_app_config
+        _config = get_or_create_app_config(db)
+        config_backend = getattr(_config, "inference_backend", None) or "ollama"
         env_backend = os.getenv("INFERENCE_BACKEND", "").strip().lower()
         self.inference_backend = env_backend if env_backend else config_backend
 
