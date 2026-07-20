@@ -1,5 +1,89 @@
 # Release Notes — July 19, 2026
 
+## Fix: Inference Backend Auto-Detection — Local and Cloud LLMs Now Work Simultaneously
+
+Fixed an issue where the `INFERENCE_BACKEND` environment variable forced a specific backend (OpenAI or Ollama), preventing users from switching between local and cloud LLMs via the Admin UI.
+
+### Problem
+When `INFERENCE_BACKEND=openai` was set in `.env` (for Docker), the backend always used OpenAI/OpenRouter even if the user selected Ollama in the Admin UI. This caused errors like "Cloud LLM authentication error: 0xroyce/plutus:latest is not a valid model ID" when trying to use a local Ollama model.
+
+### Root Cause
+The `pipeline_service.py` file was reading `INFERENCE_BACKEND` from the environment variable first, ignoring the database config set via Admin UI. The environment variable was meant for Docker overrides, but it was being applied unconditionally.
+
+### Fix
+1. **Commented out `INFERENCE_BACKEND` in `.env` and `.env.example`** — No longer forces a specific backend
+2. **Updated `pipeline_service.py` backend selection logic:**
+   - First: Read from database config (set via Admin UI)
+   - Second: Fall back to env var (for Docker overrides)
+   - Default: Use "ollama" if nothing is configured
+3. **Updated `.env` documentation** — Explains that both local and cloud LLMs can be configured simultaneously
+
+### How It Works Now
+- Users can configure **both** Ollama and OpenAI/OpenRouter in `.env`
+- The Admin UI "LLM Configuration" toggle (Local/Cloud) controls which backend is used
+- The backend auto-detects the correct API based on the selected model
+- Docker users can still override via `docker-compose.yml` `environment:` section
+
+### Files Changed
+- `.env` — Commented out `INFERENCE_BACKEND` with explanation
+- `.env.example` — Commented out with documentation
+- `backend/services/analysis/pipeline_service.py` — Fixed backend selection logic
+
+---
+
+## Fix: CORS Configuration — Frontend Can Now Reach Backend on Localhost and 127.0.0.1
+
+Fixed "Backend unreachable" errors in the frontend caused by CORS configuration not allowing `127.0.0.1` (which the frontend uses after normalizing `localhost`).
+
+### Problem
+The frontend's `backend-api.ts` converts `localhost` to `127.0.0.1`, but CORS only allowed `http://localhost:3000` and `http://localhost:8000`. Requests from `http://127.0.0.1:3000` were blocked by the browser's CORS policy.
+
+### Fix
+Updated `CORS_ORIGINS` in `.env` and `.env.example` to include both `localhost` and `127.0.0.1`:
+```env
+CORS_ORIGINS=http://localhost:3000,http://localhost:8000,http://127.0.0.1:3000,http://127.0.0.1:8000
+```
+
+### Files Changed
+- `.env` — Added `127.0.0.1` to `CORS_ORIGINS`
+- `.env.example` — Updated with both localhost and 127.0.0.1
+
+---
+
+## Fix: Database Path Configuration — Local and Docker Now Both Work
+
+Fixed a configuration issue where the database path in `.env` was set to Docker container paths (`/data/trading_system.db`), which broke local development on Windows/Mac.
+
+### Problem
+The `.env` file had `DATABASE_URL=sqlite:////data/trading_system.db` uncommented, which only works inside Docker containers (where `/data/` is a volume mount). When running locally on Windows or Mac, the path doesn't exist, causing `sqlite3.OperationalError: unable to open database file`.
+
+### Root Cause
+The `.env` file is shared between local and Docker environments, but the database paths need to be different:
+- **Local:** Needs `sqlite:///trading_system.db` (repo root)
+- **Docker:** Needs `sqlite:////data/trading_system.db` (Docker volume mount)
+
+### Fix
+1. **Commented out `DATABASE_URL` in `.env` and `.env.example`** — The Python code now uses default paths that correctly point to the repo root for local development
+2. **Added `environment:` overrides in `docker-compose.yml`** — Docker Compose now explicitly sets `DATABASE_URL` and `DECISION_LOG_DATABASE_URL` to `/data/` paths, overriding the commented-out values from `.env`
+
+### How It Works Now
+- **Local development:** `.env` has `DATABASE_URL` commented out → Python uses default paths (repo root) ✓
+- **Docker:** `docker-compose.yml` `environment:` section overrides `DATABASE_URL` to `/data/trading_system.db` ✓
+- Docker Compose applies `env_file:` first (`.env`), then `environment:` overrides it
+
+### Files Changed
+- `.env` — Commented out `DATABASE_URL` and `DECISION_LOG_DATABASE_URL`
+- `.env.example` — Commented out with explanation for users
+- `docker-compose.yml` — Added `environment:` section to override database paths for Docker
+- `README.md` — Added note about database path configuration
+
+### Backwards Compatibility
+- **Existing users:** If you have a custom `.env`, comment out the `DATABASE_URL` lines for local dev
+- **Docker users:** No change needed — `docker-compose.yml` now handles the override automatically
+- **New users:** `cp .env.example .env` works correctly for both local and Docker
+
+---
+
 ## Fix: Docker Deployment — Multiple Issues Resolved
 
 Fixed three critical issues that prevented the Docker container from starting and correctly using cloud LLM providers.

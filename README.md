@@ -111,6 +111,11 @@ The Docker setup supports any OpenAI-compatible cloud provider:
 
 SQLite databases (`trading_system.db`, `decision_log.db`) are persisted in a Docker volume (`trading-data`). Your analysis history and trades survive container restarts.
 
+**Note on database paths:**
+- **Local development:** Database files are stored in the repo root directory (auto-detected)
+- **Docker:** Database files are stored in `/data/` inside the container (mapped to `trading-data` volume)
+- The `.env` file has `DATABASE_URL` commented out by default for local dev. Docker Compose automatically overrides the database path via its `environment:` section.
+
 ### Advanced: Customization
 
 Edit `.env` to configure:
