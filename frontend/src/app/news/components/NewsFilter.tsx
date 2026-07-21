@@ -1,3 +1,5 @@
+"use client";
+
 import { useState } from "react";
 
 interface NewsFilterProps {
@@ -35,10 +37,7 @@ export function NewsFilter({ symbol, startDate, endDate, source, onFilterChange 
           <label className="block text-sm font-medium text-gray-700 mb-1">Symbol</label>
           <select
             value={symbol}
-            onChange={(e) => {
-              handleChange("symbol", e.target.value);
-              onFilterChange({ symbol: e.target.value, startDate, endDate, source });
-            }}
+            onChange={(e) => handleChange("symbol", e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md"
           >
             <option value="">All Symbols</option>
@@ -54,10 +53,7 @@ export function NewsFilter({ symbol, startDate, endDate, source, onFilterChange 
           <input
             type="date"
             value={startDate}
-            onChange={(e) => {
-              handleChange("startDate", e.target.value);
-              onFilterChange({ symbol, startDate: e.target.value, endDate, source });
-            }}
+            onChange={(e) => handleChange("startDate", e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md"
           />
         </div>
@@ -67,10 +63,7 @@ export function NewsFilter({ symbol, startDate, endDate, source, onFilterChange 
           <input
             type="date"
             value={endDate}
-            onChange={(e) => {
-              handleChange("endDate", e.target.value);
-              onFilterChange({ symbol, startDate, endDate: e.target.value, source });
-            }}
+            onChange={(e) => handleChange("endDate", e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md"
           />
         </div>
@@ -80,10 +73,7 @@ export function NewsFilter({ symbol, startDate, endDate, source, onFilterChange 
           <label className="block text-sm font-medium text-gray-700 mb-1">Source</label>
           <select
             value={source}
-            onChange={(e) => {
-              handleChange("source", e.target.value);
-              onFilterChange({ symbol, startDate, endDate, source: e.target.value });
-            }}
+            onChange={(e) => handleChange("source", e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md"
           >
             {sources.map((s) => (

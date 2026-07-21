@@ -1,13 +1,15 @@
+"use client";
+
 import { useState, useEffect } from "react";
 import { NewsFilter } from "./components/NewsFilter";
 import { NewsList } from "./components/NewsList";
 import { NewsDetail } from "./components/NewsDetail";
 
 export default function NewsPage() {
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedItem, setSelectedItem] = useState<any>(null);
   
   // Filters
   const [symbol, setSymbol] = useState("");

@@ -1,3 +1,5 @@
+"use client";
+
 import { useState } from "react";
 
 interface NewsDetailProps {
@@ -82,51 +84,6 @@ export function NewsDetail({ item, onClose }: NewsDetailProps) {
               <p className="text-sm text-blue-800 whitespace-pre-wrap">
                 {item.summary}
               </p>
-            </div>
-          )}
-
-          {/* Details */}
-          {item.details && (
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4">
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">
-                Details
-              </h3>
-              <dl className="grid grid-cols-2 gap-2 text-sm">
-                {item.details.form_type && (
-                  <>
-                    <dt className="text-gray-500">Form Type</dt>
-                    <dd className="text-gray-900">{item.details.form_type}</dd>
-                  </>
-                )}
-                {item.details.items && (
-                  <>
-                    <dt className="text-gray-500">Items</dt>
-                    <dd className="text-gray-900">{item.details.items}</dd>
-                  </>
-                )}
-                {item.details.has_raw_text && (
-                  <dt className="col-span-2">
-                    <button
-                      onClick={() => setShowFullText(!showFullText)}
-                      className="text-blue-600 hover:text-blue-800 font-medium"
-                    >
-                      {showFullText ? "Hide" : "Show"} Full Text
-                    </button>
-                  </dt>
-                )}
-              </dl>
-            </div>
-          )}
-
-          {/* Full Text */}
-          {showFullText && item.details?.has_raw_text && (
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4">
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">
-                Full Text
-              </h3>
-              <pre className="text-xs text-gray-800 whitespace-pre-wrap overflow-x-auto">
-                {item.details.raw_text_preview || "Full text available but not loaded. Click to fetch..."}
-              </pre>
             </div>
           )}
 
