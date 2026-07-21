@@ -18,7 +18,14 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "Missing trade_id" }, { status: 400 });
         }
         const { trade_id } = body;
-        const r = await fetch(`${getBackendApiUrl()}/api/v1/paper-trading/${trade_id}/close`, {
+        
+        // Validate trade_id to prevent SSRF/path traversal
+        if (!Number.isInteger(Number(trade_id)) || Number(trade_id) <= 0) {
+            return NextResponse.json({ error: "Invalid trade_id" }, { status: 400 });
+        }
+        
+        const validatedTradeId = Number(trade_id);
+        const r = await fetch(`${getBackendApiUrl()}/api/v1/paper-trading/${validatedTradeId}/close`, {
             method: "POST",
             cache: "no-store",
             headers: backendHeaders({ "Content-Type": "application/json" })

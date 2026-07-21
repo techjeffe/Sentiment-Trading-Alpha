@@ -10,6 +10,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import sys
+import os
 
 try:
     import keyring
@@ -47,12 +48,25 @@ def export_secrets():
                 if value:
                     f.write(f"{env_var}={value}\n")
                     exported.append(env_var)
-                    print(f"  Exported {env_var}")
             except Exception:
                 pass
 
     if exported:
         print(f"\nSuccessfully exported {len(exported)} secrets to {OUTPUT_FILE}")
+        print("\n⚠️  SECURITY WARNING:")
+        print("   - This file contains sensitive API keys and secrets in plain text")
+        print("   - Store it securely and restrict file permissions")
+        print("   - Delete this file immediately after Docker migration is complete")
+        print("   - Never commit this file to version control")
+        
+        # Attempt to set restrictive permissions (Unix-like systems)
+        try:
+            os.chmod(OUTPUT_FILE, 0o600)  # Read/write only by owner
+            print("\n✓ File permissions set to 600 (owner read/write only)")
+        except (OSError, AttributeError):
+            # Windows or permission error - just warn user
+            print("\n⚠️  Please manually set restrictive permissions on this file")
+            
         return 0
     else:
         print("\nNo secrets found in keyring (or keyring not available)")

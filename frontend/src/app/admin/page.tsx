@@ -8,6 +8,33 @@ import { formatTs, useTimezone, COMMON_TIMEZONES } from "@/lib/timezone";
 import { EMPTY_CONFIG, BASIC_MODE_DEFAULTS, normalizeConfigPayload, AppConfig } from "@/lib/utils/config-normalizer";
 import { normalizeSymbolInput, normalizeFeedUrl, normalizeArticleLimit } from "@/lib/constants/feed-utils";
 
+// Helper function to safely derive provider from URL
+function deriveProviderFromUrl(urlStr: string): string {
+    try {
+        const url = new URL(urlStr);
+        const hostname = url.hostname.toLowerCase();
+        
+        // Check exact hostname or ends with the domain (to handle subdomains)
+        if (hostname === 'openrouter.ai' || hostname.endsWith('.openrouter.ai')) {
+            return "openrouter";
+        }
+        if (hostname === 'anthropic.com' || hostname.endsWith('.anthropic.com')) {
+            return "anthropic";
+        }
+        if (hostname === 'googleapis.com' || hostname.endsWith('.googleapis.com') || 
+            hostname === 'generativelanguage.googleapis.com' || hostname.endsWith('.generativelanguage.googleapis.com')) {
+            return "google";
+        }
+        if (hostname === 'openai.com' || hostname.endsWith('.openai.com')) {
+            return "openai";
+        }
+        return "custom";
+    } catch {
+        // Invalid URL, return custom
+        return "custom";
+    }
+}
+
 // Sections
 import { OverviewSection } from "@/components/admin/sections/OverviewSection";
 import { TradingLogicSection } from "@/components/admin/sections/TradingLogicSection";
@@ -411,12 +438,8 @@ export default function AdminPage() {
 
             if (isCloudLegacy) {
                 derivedUrl = legacyOpenaiUrl || "https://api.openai.com/v1";
-                // Guess provider from URL
-                if (derivedUrl.includes("openrouter.ai")) derivedProvider = "openrouter";
-                else if (derivedUrl.includes("anthropic.com")) derivedProvider = "anthropic";
-                else if (derivedUrl.includes("googleapis.com") || derivedUrl.includes("generativelanguage")) derivedProvider = "google";
-                else if (derivedUrl.includes("openai.com")) derivedProvider = "openai";
-                else derivedProvider = "custom";
+                // Guess provider from URL - properly parse URL to avoid substring matching issues
+                derivedProvider = deriveProviderFromUrl(derivedUrl);
             } else {
                 if (legacyBackend === "ollama") {
                     derivedProvider = "ollama";
