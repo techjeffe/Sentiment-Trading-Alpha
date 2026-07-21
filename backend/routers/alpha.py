@@ -104,16 +104,18 @@ def get_information_coefficient(
         return {"ic_by_horizon": {}, "pairs_count": 0, "message": "No data yet — run analyses to populate."}
 
     run_ids = list({r.run_id for r in dl_rows})
-    # Batch query paper_trades + trade_snapshots from main DB using expanding IN
+    # Batch query trades + trade_snapshots from main DB using expanding IN.
+    # NOTE: trade_snapshots.trade_id is a FK into `trades` (the recommendation
+    # log), not `paper_trades` — the two tables have independent id sequences.
     ts_query = text("""
         SELECT
-            pt.analysis_request_id,
-            pt.underlying,
+            t.request_id,
+            t.underlying_symbol,
             ts.horizon_label,
             ts.raw_return_pct
-        FROM paper_trades pt
-        JOIN trade_snapshots ts ON ts.trade_id = pt.id
-        WHERE pt.analysis_request_id IN :run_ids
+        FROM trades t
+        JOIN trade_snapshots ts ON ts.trade_id = t.id
+        WHERE t.request_id IN :run_ids
           AND ts.horizon_label IN :horizons
     """).bindparams(
         bindparam("run_ids", expanding=True),
@@ -124,7 +126,9 @@ def get_information_coefficient(
     # returns[(run_id, symbol, horizon)] = raw_return_pct
     returns: Dict[tuple, float] = {}
     for ts in ts_rows:
-        key = (ts.analysis_request_id, ts.underlying.upper(), ts.horizon_label)
+        if not ts.underlying_symbol:
+            continue
+        key = (ts.request_id, ts.underlying_symbol.upper(), ts.horizon_label)
         returns[key] = ts.raw_return_pct
 
     # Build paired (confidence, return) series per horizon

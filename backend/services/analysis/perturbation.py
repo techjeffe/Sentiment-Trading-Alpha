@@ -68,8 +68,10 @@ def run_perturbation(
     if not rows:
         return {"error": "No historical rows with entry_threshold_used found", "rows_checked": 0}
 
-    # Pull all trade_snapshots for any paper_trade linked to these runs.
-    # Link: paper_trades.analysis_request_id = decision_log_run.run_id.
+    # Pull all trade_snapshots for any trade linked to these runs.
+    # Link: trades.request_id = decision_log_run.run_id.
+    # NOTE: trade_snapshots.trade_id is a FK into `trades` (the recommendation
+    # log), not `paper_trades` — the two tables have independent id sequences.
     run_ids = list({r.run_id for r in rows})
     if run_ids:
         ts_rows = (
@@ -77,26 +79,28 @@ def run_perturbation(
             .filter(TradeSnapshot.horizon_label.in_(horizons))
             .all()
         )
-        # Build lookup: paper_trade_id → {horizon → raw_return_pct}
+        # Build lookup: trade_id → {horizon → raw_return_pct}
         returns_by_pt: Dict[int, Dict[str, float]] = {}
         for ts in ts_rows:
             returns_by_pt.setdefault(ts.trade_id, {})[ts.horizon_label] = ts.raw_return_pct
     else:
         returns_by_pt = {}
 
-    # We also need paper_trades.analysis_request_id → paper_trade_id mapping.
+    # We also need trades.request_id → trade_id mapping.
     # We use a raw query against the main DB because TradeSnapshot is in main.
     pt_map_rows = main_db.execute(
-        text("SELECT id, analysis_request_id, underlying FROM paper_trades WHERE analysis_request_id IN :run_ids")
+        text("SELECT id, request_id, underlying_symbol FROM trades WHERE request_id IN :run_ids")
         .bindparams(bindparam("run_ids", expanding=True)),
         {"run_ids": run_ids},
     ).fetchall()
 
-    # run_id + symbol → [paper_trade_id, ...]
+    # run_id + symbol → [trade_id, ...]
     from collections import defaultdict
     pt_by_run_sym: Dict[tuple, List[int]] = defaultdict(list)
     for pt in pt_map_rows:
-        pt_by_run_sym[(pt.analysis_request_id, pt.underlying.upper())].append(pt.id)
+        if not pt.underlying_symbol:
+            continue
+        pt_by_run_sym[(pt.request_id, pt.underlying_symbol.upper())].append(pt.id)
 
     def _would_fire(score: float, threshold: float) -> bool:
         return abs(score) >= threshold
