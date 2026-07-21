@@ -269,5 +269,21 @@
         "VOLATILE_EVENT": 180
       }
     }
+  },
+  "edgar_filings": {
+    "_comment": "SEC EDGAR filings integration for structured company data.",
+    "enabled": true,
+    "poll_interval_minutes": 60,
+    "tracked_form_types": ["10-K", "10-Q", "8-K"],
+    "material_8k_items": ["2.02", "5.02", "7.01", "8.01"],
+    "max_filing_chars_for_llm": 40000,
+    "lookback_days_on_first_poll": 7
+  },
+  "data_retention": {
+    "_comment": "How long to keep diferent data types in the database.",
+    "scraped_articles_days": 30,
+    "truth_social_posts_days": 7,
+    "sec_filings_days": 90,
+    "processed_items_prune_after_days": 30
   }
 }

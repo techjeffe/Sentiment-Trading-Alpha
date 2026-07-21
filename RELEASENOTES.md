@@ -1,4 +1,35 @@
-# Release Notes — January 16, 2027
+# Release Notes — January 20, 2027
+
+## Feature: SEC EDGAR Filings Integration
+
+Added SEC EDGAR filings polling and LLM-powered summarization for tracked operating companies.
+
+### New Features
+- Poll SEC EDGAR for new 10-K, 10-Q, and 8-K filings from tracked symbols
+- Automatic CIK resolution and caching per symbol
+- Filing text extraction using trafilatura
+- LLM-powered filing summarization for market-relevant insights
+- Integration with sentiment engine: recent filing summaries automatically included in symbol specialist prompts
+- REST API endpoints for manual trigger and configuration
+- Background polling scheduler with configurable interval
+
+### API Endpoints
+- `GET /api/v1/edgar/filings` - List stored filings
+- `POST /api/v1/edgar/poll` - Trigger poll cycle
+- `POST /api/v1/edgar/process` - Process unprocessed filings
+- `GET /api/v1/edgar/config` - Get configuration
+- `PUT /api/v1/edgar/config` - Update configuration
+
+### Configuration
+- Added `edgar_filings` block to `logic_config.json`
+- Added nullable override columns to `app_config` table
+- Environment variable `EDGAR_USER_AGENT` required for SEC API compliance
+
+### Database
+- New `sec_filings` table for storing filing metadata and summaries
+- Added `symbol_edgar_ciks` JSON column to `app_config` for CIK cache
+
+---
 
 ## Fix: Concurrent Run Conflict + Pending Order Cancellation — No More Simultaneous Opposing Positions
 

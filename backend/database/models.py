@@ -337,6 +337,9 @@ class AppConfig(Base):
     # ISO8601 timestamp per symbol of when its proxy terms were last generated —
     # drives the 30-day TTL recheck in ensure_symbol_proxy_terms_fresh().
     symbol_proxy_terms_generated_at = Column(JSON, nullable=False, default={})
+    # EDGAR CIK cache: ticker → 10-digit zero-padded CIK string.
+    # Populated once per symbol via EdgarClient.get_cik_for_ticker().
+    symbol_edgar_ciks = Column(JSON, nullable=False, default={})
     display_timezone = Column(String(64), nullable=False, default="")
     enabled_rss_feeds = Column(JSON, nullable=False, default=[])
     custom_rss_feeds = Column(JSON, nullable=False, default=[])
@@ -387,6 +390,12 @@ class AppConfig(Base):
     remote_snapshot_send_on_position_change = Column(Boolean, nullable=False, default=True)
     remote_snapshot_include_closed_trades = Column(Boolean, nullable=False, default=False)
     remote_snapshot_max_recommendations = Column(Integer, nullable=False, default=4)
+
+    # ── EDGAR filings config overrides (null = use logic_config.json default) ──
+    edgar_filings_enabled = Column(Boolean, nullable=True, default=None)
+    edgar_filings_poll_interval_minutes = Column(Integer, nullable=True, default=None)
+    edgar_filings_tracked_form_types = Column(JSON, nullable=True, default=None)
+    edgar_filings_material_8k_items = Column(JSON, nullable=True, default=None)
 
     # Trading logic overrides — null means "use logic_config.json default"
     vol_sizing_portfolio_cap_usd = Column(Float, nullable=True, default=None)
@@ -494,6 +503,35 @@ class AlpacaDispatchError(Base):
     trading_mode    = Column(String(10),  nullable=False, default="live")
     acknowledged    = Column(Boolean,     nullable=False, default=False)
     created_at      = Column(DateTime(timezone=True), nullable=False, default=func.now())
+
+
+class SecFiling(Base):
+    """
+    SEC EDGAR filing data for tracked symbols.
+    Stores filing metadata and extracted text for LLM processing.
+    """
+    __tablename__ = "sec_filings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(10), nullable=False)
+    cik = Column(String(10), nullable=False)
+    accession_number = Column(String(24), nullable=False, unique=True)
+    form_type = Column(String(20), nullable=False)          # "10-K", "10-Q", "8-K", ...
+    filing_date = Column(DateTime(timezone=True), nullable=False)
+    report_date = Column(DateTime(timezone=True), nullable=True)
+    items = Column(String(64), nullable=True)              # 8-K item codes, comma-separated
+    primary_document_url = Column(Text, nullable=False)
+    raw_text = Column(Text, nullable=True)                 # extracted filing text (or key sections)
+    llm_summary = Column(Text, nullable=True)              # Stage 1 structured extraction / summary
+    processed = Column(Boolean, nullable=False, default=False)
+    discovered_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_sec_filings_symbol", "symbol"),
+        Index("ix_sec_filings_processed", "processed"),
+        Index("ix_sec_filings_filing_date", "filing_date"),
+    )
 
 
 class AuditLog(Base):

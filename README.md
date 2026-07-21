@@ -2,7 +2,7 @@
 
 **Turn news headlines into trade insights using AI — automatically.**
 
-Sentiment Trading Alpha reads financial news, understands what it means using artificial intelligence, and helps you make informed trading decisions. It analyzes geopolitical events, economic data, and market sentiment to generate buy/sell/hold recommendations for popular ETFs like SPY, QQQ, USO, and crypto funds.
+Sentiment Trading Alpha reads financial news, understands what it means using artificial intelligence, and helps you make informed trading decisions. It analyzes geopolitical events, economic data, SEC EDGAR filings, and market sentiment to generate buy/sell/hold recommendations for popular ETFs like SPY, QQQ, USO, and crypto funds.
 
 > ⚠️ **Important:** This is experimental software for educational purposes. It is NOT financial advice. Trading involves risk — especially with leveraged ETFs.
 
@@ -13,9 +13,10 @@ Sentiment Trading Alpha reads financial news, understands what it means using ar
 Imagine having a research assistant that:
 - **Monitors the news 24/7** — Scans hundreds of financial news sources automatically
 - **Understands the context** — Uses AI to figure out if news is bullish, bearish, or neutral
-- **Connects the dots** — Combines news with economic data (interest rates, oil inventories, etc.)
+- **Connects the dots** — Combines news with economic data (interest rates, oil inventories, etc.) and SEC EDGAR filings
 - **Gives you clear signals** — Tells you BUY, SELL, or HOLD with a confidence level
 - **Tests strategies safely** — Simulates trades with fake money so you can learn without risk
+- **Unified News View** — Browse all RSS articles, Truth Social posts, and EDGAR filings in one place
 
 ### Example Output
 ```

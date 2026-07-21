@@ -37,6 +37,7 @@ def migrate():
             ("symbol_company_aliases", "JSON", "'{}'"),
             ("symbol_proxy_terms", "JSON", "'{}'"),
             ("symbol_proxy_terms_generated_at", "JSON", "'{}'"),
+            ("symbol_edgar_ciks", "JSON", "'{}'"),
             ("enabled_rss_feeds", "JSON", "'[]'"),
             ("custom_rss_feeds", "JSON", "'[]'"),
             ("custom_rss_feed_labels", "JSON", "'{}'"),
@@ -102,6 +103,10 @@ def migrate():
             ("hold_decay_enabled", "BOOLEAN"),
             ("accumulate_on_confirmation_enabled", "BOOLEAN"),
             ("accumulate_max_multiplier", "REAL"),
+            ("edgar_filings_enabled", "BOOLEAN"),
+            ("edgar_filings_poll_interval_minutes", "INTEGER"),
+            ("edgar_filings_tracked_form_types", "JSON"),
+            ("edgar_filings_material_8k_items", "JSON"),
         ]:
             if column_name not in existing_cols:
                 print(f"Adding {column_name} to app_config...")
@@ -379,6 +384,33 @@ def migrate():
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_alpaca_dispatch_errors_created_at ON alpaca_dispatch_errors (created_at)"))
             conn.commit()
             print("alpaca_dispatch_errors table created.")
+
+        # ── sec_filings table ────────────────────────────────────────────────
+        if "sec_filings" not in tables:
+            print("Creating sec_filings table...")
+            conn.execute(text("""
+                CREATE TABLE sec_filings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol VARCHAR(10) NOT NULL,
+                    cik VARCHAR(10) NOT NULL,
+                    accession_number VARCHAR(24) NOT NULL UNIQUE,
+                    form_type VARCHAR(20) NOT NULL,
+                    filing_date DATETIME NOT NULL,
+                    report_date DATETIME,
+                    items VARCHAR(64),
+                    primary_document_url TEXT NOT NULL,
+                    raw_text TEXT,
+                    llm_summary TEXT,
+                    processed BOOLEAN NOT NULL DEFAULT 0,
+                    discovered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    processed_at DATETIME
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sec_filings_symbol ON sec_filings (symbol)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sec_filings_processed ON sec_filings (processed)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sec_filings_filing_date ON sec_filings (filing_date)"))
+            conn.commit()
+            print("sec_filings table created.")
 
     # ── Decision Log tables ──────────────────────────────────────────────
     # Created via metadata.create_all on the decision_log engine during

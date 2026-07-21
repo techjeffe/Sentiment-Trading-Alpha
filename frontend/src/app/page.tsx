@@ -718,6 +718,15 @@ export default function Home() {
                     >
                         {advancedMode ? "Adv" : "Std"}
                     </button>
+                    <div className="w-px h-5 bg-slate-700/60 mx-1" />
+                    <Link
+                        href="/news"
+                        className="rounded-lg py-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors text-blue-400 hover:text-blue-200 hover:bg-blue-900/30 border border-blue-500/30"
+                        title="News & Filings — RSS, Truth Social, EDGAR"
+                    >
+                        📰 News
+                    </Link>
+                    <div className="w-px h-5 bg-slate-700/60 mx-1" />
                     {advancedMode && (
                         <Link
                             href="/alpha"

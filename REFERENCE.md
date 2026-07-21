@@ -203,6 +203,8 @@ The backend runs `migrate.py` automatically on every startup. This table is for 
 | `trade_closes` | table | — | Realized P&L recording |
 | `paper_trades` | table | — | Auto-simulated paper trades |
 | `scraped_articles` | table | — | DB-backed article queue |
+| `sec_filings` | table | — | SEC EDGAR filings for tracked symbols |
+| `symbol_edgar_ciks` | `app_config` | `{}` | CIK cache for EDGAR integration |
 | `analysis_lock_request_id` | `app_config` | `''` | Active analysis lease owner |
 | `analysis_lock_acquired_at` | `app_config` | `NULL` | Analysis lease start time |
 | `analysis_lock_expires_at` | `app_config` | `NULL` | Analysis lease expiry time |
@@ -229,6 +231,10 @@ The backend runs `migrate.py` automatically on every startup. This table is for 
 | `alpaca_daily_loss_limit_usd` | `app_config` | `NULL` | Daily realized loss circuit breaker |
 | `alpaca_max_consecutive_losses` | `app_config` | `3` | Consecutive losses before auto-disable |
 | `alpaca_high_conviction_override_enabled` | `app_config` | `false` | High conviction override for PDT |
+| `edgar_filings_enabled` | `app_config` | `NULL` | EDGAR filings integration toggle |
+| `edgar_filings_poll_interval_minutes` | `app_config` | `NULL` | EDGAR poll interval override |
+| `edgar_filings_tracked_form_types` | `app_config` | `NULL` | EDGAR form types override |
+| `edgar_filings_material_8k_items` | `app_config` | `NULL` | EDGAR material 8-K items override |
 | `alpaca_orders` | table | — | Full audit log of every Alpaca order attempt |
 
 To run the migration manually:
@@ -378,3 +384,63 @@ Alternative dev server modes (both platforms):
 ```powershell
 npm run dev:turbo    # Turbopack
 npm run dev:webpack  # fallback
+---
+
+## SEC EDGAR Filings Integration
+
+Polls SEC EDGAR for new filings from tracked operating companies and stores them for LLM-enhanced sentiment analysis.
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/edgar/filings` | GET | List stored filings (filter by symbol, processed) |
+| `/api/v1/edgar/poll` | POST | Manually trigger EDGAR poll cycle |
+| `/api/v1/edgar/process` | POST | Process unprocessed filings (fetch text, LLM summary) |
+| `/api/v1/edgar/config` | GET | Get current EDGAR configuration |
+| `/api/v1/edgar/config` | PUT | Update EDGAR configuration |
+
+### Configuration
+
+EDGAR settings are in `backend/config/logic_config.json` under `edgar_filings` block:
+
+| Setting | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Enable/disable EDGAR integration |
+| `poll_interval_minutes` | `60` | Polling interval |
+| `tracked_form_types` | `["10-K", "10-Q", "8-K"]` | SEC form types to poll |
+| `material_8k_items` | `["2.02", "5.02", "7.01", "8.01"]` | Material 8-K item codes |
+| `max_filing_chars_for_llm` | `40000` | Max chars sent to LLM |
+| `lookback_days_on_first_poll` | `7` | Initial lookback period |
+
+Override any setting via Admin UI (stored in `app_config` table).
+
+### Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `EDGAR_USER_AGENT` | Yes | Compliant SEC User-Agent (e.g., `Sentiment Trading Alpha admin@example.com`) |
+
+### Database
+
+- `sec_filings` table: Stores filing metadata and processed text/summaries
+- `app_config.symbol_edgar_ciks`: JSON cache of ticker→CIK mappings
+
+### Background Polling
+
+The `_edgar_polling_scheduler_loop()` runs as an async task in the FastAPI lifespan handler, checking for new filings at the configured interval.
+
+### Sentiment Engine Integration
+
+Recent filing summaries are automatically included in the symbol specialist prompt when analyzing tracked operating companies. The context is passed via `edgar_filing_context` parameter to `format_symbol_specialist_context_prompt()`.
+
+### Testing
+
+```powershell
+# Test EDGAR client
+cd backend
+python -m services.data_ingestion.edgar_client
+
+# Test EDGAR worker (poll + process)
+python -m services.data_ingestion.edgar_worker
+```

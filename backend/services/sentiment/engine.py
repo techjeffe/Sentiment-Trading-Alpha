@@ -349,6 +349,7 @@ class SentimentEngine:
         model_override: Optional[str] = None,
         proxy_context: str = "",
         web_research_context: str = "",
+        edgar_filing_context: str = "",
     ) -> SentimentAnalysisResponse:
         """Analyze text with market context, optionally injecting Stage 1 proxy context."""
         from .prompts import (
@@ -364,6 +365,14 @@ class SentimentEngine:
 
         if specialist_symbol:
             # Lean single-symbol prompt — no cross-symbol rules or basket instructions
+            # Auto-populate EDGAR filing context if not provided
+            if not edgar_filing_context:
+                try:
+                    from services.data_ingestion.edgar_worker import get_recent_filing_summaries_for_symbol
+                    edgar_filing_context = get_recent_filing_summaries_for_symbol(specialist_symbol)
+                except Exception:
+                    pass
+            
             prompt = format_symbol_specialist_context_prompt(
                 symbol=specialist_symbol,
                 specialist_focus=specialist_focus,
@@ -372,6 +381,7 @@ class SentimentEngine:
                 active_symbol_price=active_symbol_price,
                 validation_context=validation_context,
                 web_research_context=web_research_context,
+                edgar_filing_context=edgar_filing_context,
                 proxy_context=proxy_context,
                 source_count=source_count,
             )
@@ -1313,7 +1323,7 @@ class SentimentEngine:
         max_tokens: Optional[int] = None,
         response_schema: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        print(f"SentimentEngine._call_ollama_sync → backend={self.inference_backend!r}, model_override={model_override!r}")
+        print(f"SentimentEngine._call_ollama_sync -> backend={self.inference_backend!r}, model_override={model_override!r}")
         if self.inference_backend == "vllm":
             return self._call_vllm_sync(prompt, model_override, force_json, max_tokens, response_schema)
         if self.inference_backend == "openai":

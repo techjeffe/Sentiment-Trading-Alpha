@@ -555,7 +555,7 @@ Python computes all scores from your extracted facts. Do NOT invent numbers.
 
 IMPORTANT CONTEXT: This article reached you because Stage 1 keyword filtering confirmed it contains terms relevant to {symbol}. It is NOT random noise — your job is to classify HOW it connects, not WHETHER it connects.
 
-{symbol} price: ${active_symbol_price}{source_count_block}{validation_block}{web_block}
+{symbol} price: ${active_symbol_price}{source_count_block}{validation_block}{web_block}{edgar_block}
 
 Specialist focus — what drives {symbol}:
 {specialist_focus}
@@ -786,6 +786,7 @@ def format_symbol_specialist_context_prompt(
     active_symbol_price: float = 0.0,
     validation_context: str = "",
     web_research_context: str = "",
+    edgar_filing_context: str = "",
     proxy_context: str = "",
     source_count: int = 0,
     # Legacy kwargs accepted but ignored to avoid call-site breakage
@@ -808,6 +809,7 @@ def format_symbol_specialist_context_prompt(
 
     validation_block = f"\nValidation: {validation_context}" if validation_context else ""
     web_block = f"\n\nWeb research context:\n{web_research_context}" if web_research_context else ""
+    edgar_block = f"\n\nRecent SEC filing summaries:\n{edgar_filing_context}" if edgar_filing_context else ""
     proxy_block = f"\nProxy-term context:\n{proxy_context}\n" if proxy_context else ""
     source_count_block = f" | {source_count} articles" if source_count > 0 else ""
 
@@ -818,6 +820,7 @@ def format_symbol_specialist_context_prompt(
         source_count_block=source_count_block,
         validation_block=validation_block,
         web_block=web_block,
+        edgar_block=edgar_block,
         specialist_focus=specialist_focus.strip(),
         proxy_block=proxy_block,
     )

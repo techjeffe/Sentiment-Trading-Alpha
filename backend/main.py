@@ -24,6 +24,8 @@ from database.engine import SessionLocal
 from database.models import AnalysisResult
 from database.models import init_db
 from routers import router as analysis_router
+from routers import edgar as edgar_router
+from routers import news as news_router
 from services.app_config import config_to_dict_with_stats, get_or_create_app_config
 from services.pnl_tracker import PnLTracker, SCHEDULER_INTERVAL_SECONDS
 from services.data_ingestion.worker import run_ingestion_cycle
@@ -256,6 +258,58 @@ async def _weekly_feedback_scheduler_loop():
         await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
 
 
+async def _edgar_polling_scheduler_loop():
+    """Periodically poll SEC EDGAR for new filings from tracked companies."""
+    from services.data_ingestion.edgar_worker import run_edgar_poll_cycle
+
+    try:
+        startup_grace_seconds = max(0, int(os.getenv("EDGAR_STARTUP_GRACE_SECONDS", "30")))
+    except ValueError:
+        startup_grace_seconds = 30
+
+    if startup_grace_seconds > 0:
+        print(f"EDGAR polling scheduler startup grace: waiting {startup_grace_seconds}s before first cycle")
+        await asyncio.sleep(startup_grace_seconds)
+
+    while True:
+        poll_interval = 3600  # Default: 1 hour
+        try:
+            db = SessionLocal()
+            try:
+                from services.app_config import get_or_create_app_config
+                config = get_or_create_app_config(db)
+                # Check if EDGAR is enabled
+                enabled = config.edgar_filings_enabled
+                if enabled is None:
+                    # Fall back to logic_config.json
+                    from config.logic_loader import LOGIC
+                    enabled = LOGIC.get("edgar_filings", {}).get("enabled", False)
+                
+                if not enabled:
+                    print("[edgar] EDGAR filings disabled, skipping poll cycle")
+                    await asyncio.sleep(300)  # Check every 5 minutes if enabled
+                    continue
+
+                # Get poll interval from config
+                poll_interval_minutes = config.edgar_filings_poll_interval_minutes
+                if poll_interval_minutes is None:
+                    from config.logic_loader import LOGIC
+                    poll_interval_minutes = LOGIC.get("edgar_filings", {}).get("poll_interval_minutes", 60)
+                poll_interval = poll_interval_minutes * 60  # Convert to seconds
+            finally:
+                db.close()
+
+            # Run the poll cycle
+            print("[edgar] Starting EDGAR poll cycle...")
+            summary = run_edgar_poll_cycle()
+            print(f"[edgar] Poll cycle complete: {summary.get('filings_stored', 0)} new filings")
+
+        except Exception as e:
+            print(f"[edgar] Polling scheduler error: {e}")
+
+        await asyncio.sleep(poll_interval)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager for startup and shutdown events."""
@@ -264,6 +318,7 @@ async def lifespan(app: FastAPI):
     alpaca_poll_task         = None
     feedback_scheduler_task  = None
     telegram_bot_task        = None
+    edgar_poll_task          = None
 
     print("=" * 60)
     print("3x Leveraged Sentiment Trading System - Starting...")
@@ -368,6 +423,9 @@ async def lifespan(app: FastAPI):
     feedback_scheduler_task = asyncio.create_task(_weekly_feedback_scheduler_loop())
     print("Weekly feedback analysis scheduler started (Friday 4pm CT, every 30 min check)")
 
+    edgar_poll_task = asyncio.create_task(_edgar_polling_scheduler_loop())
+    print("EDGAR filings poll scheduler started (hourly interval)")
+
     try:
         from services.app_config import get_or_create_app_config
         from services.secret_store import get_telegram_credentials
@@ -410,6 +468,7 @@ async def lifespan(app: FastAPI):
         (alpaca_poll_task, "alpaca_poll"),
         (feedback_scheduler_task, "feedback_scheduler"),
         (telegram_bot_task, "telegram_bot"),
+        (edgar_poll_task, "edgar_poll"),
     ]:
         if task:
             task.cancel()
@@ -630,6 +689,8 @@ async def get_metrics():
 
 
 app.include_router(analysis_router, prefix="/api/v1", tags=["API"])
+app.include_router(edgar_router.router, prefix="/api/v1/edgar", tags=["edgar"])
+app.include_router(news_router.router, prefix="/api/v1/news", tags=["news"])
 
 
 if __name__ == "__main__":
