@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { NewsFilter } from "./components/NewsFilter";
 import { NewsList } from "./components/NewsList";
 import { NewsDetail } from "./components/NewsDetail";
+import Link from "next/link";
 
 export default function NewsPage() {
   const [items, setItems] = useState<any[]>([]);
@@ -42,6 +43,28 @@ export default function NewsPage() {
     }
   };
 
+  const handleProcessAll = async () => {
+    if (!confirm("Process all unprocessed items with AI summarization? This may take a while.")) {
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      const res = await fetch('/api/v1/news/process-all', {
+        method: 'POST',
+      });
+      const data = await res.json();
+      alert(`Processing started! ${data.message || 'Check backend logs for progress.'}`);
+      // Refresh the list after a delay
+      setTimeout(() => fetchNews(), 2000);
+    } catch (err) {
+      console.error("Failed to process items:", err);
+      alert("Failed to start processing. Check console for details.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchNews();
   }, [symbol, startDate, endDate, source, offset]);
@@ -64,7 +87,21 @@ export default function NewsPage() {
 
   return (
     <div className="news-page">
-      <h1 className="text-2xl font-bold mb-4">📰 News & Filings</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold">📰 News & Filings</h1>
+        <div className="flex gap-2">
+          <button
+            onClick={handleProcessAll}
+            disabled={loading}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            Process All Unprocessed
+          </button>
+          <Link href="/" className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700">
+            ← Dashboard
+          </Link>
+        </div>
+      </div>
       
       <NewsFilter
         symbol={symbol}

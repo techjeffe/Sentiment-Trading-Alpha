@@ -95,9 +95,9 @@ async def get_unified_news(
     
     # Query 2: RSS Feed Articles
     if not source or source == "rss":
-        articles_query = db.query(ScrapedArticle).filter(
-            ScrapedArticle.processed == True  # Only show processed articles
-        )
+        articles_query = db.query(ScrapedArticle)
+        # Note: Removed filter(ScrapedArticle.processed == True) to show ALL articles
+        # This allows users to see unprocessed items and process them
         
         # Apply date filters
         if date_filter.get("start"):
@@ -215,3 +215,37 @@ async def cleanup_old_data(
     except Exception as exc:
         logger.error(f"Cleanup failed: {exc}")
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(exc)}")
+
+
+@router.post("/process-all")
+async def process_all_unprocessed(
+    db: Session = Depends(get_db),
+    batch_size: int = Query(5, ge=1, le=20),
+):
+    """
+    Process unprocessed items in small batches.
+    
+    Args:
+        batch_size: Number of filings to process in this batch (default 5, max 20)
+    
+    Returns immediately and processes in background.
+    """
+    try:
+        # Import here to avoid circular imports
+        from services.data_ingestion.edgar_worker import process_unprocessed_filings
+        
+        # Run processing in background (don't await - return immediately)
+        # Use asyncio.create_task to run in background
+        task = asyncio.create_task(
+            process_unprocessed_filings(limit=batch_size, newest_first=True)
+        )
+        
+        return {
+            "status": "processing",
+            "message": f"Processing up to {batch_size} filings in background. Check backend logs for progress.",
+            "batch_size": batch_size,
+        }
+        
+    except Exception as exc:
+        logger.error(f"Process all failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(exc)}")

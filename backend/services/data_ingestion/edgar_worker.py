@@ -437,9 +437,13 @@ def cleanup_old_filings(retention_days: int = 90) -> int:
             db.close()
 
 
-async def process_unprocessed_filings(limit: int = 10) -> Dict[str, Any]:
+async def process_unprocessed_filings(limit: int = 10, newest_first: bool = True) -> Dict[str, Any]:
     """
     Process unprocessed filings: fetch text and run LLM summarization.
+    
+    Args:
+        limit: Maximum number of filings to process
+        newest_first: If True, process newest filings first (by filing_date DESC)
     
     Returns a summary dict with counts of processed filings.
     """
@@ -455,9 +459,17 @@ async def process_unprocessed_filings(limit: int = 10) -> Dict[str, Any]:
         db = SessionLocal()
         
         # Get unprocessed filings
-        unprocessed = db.query(SecFiling).filter(
+        query = db.query(SecFiling).filter(
             SecFiling.processed == False
-        ).limit(limit).all()
+        )
+        
+        # Order by date (newest first if requested)
+        if newest_first:
+            query = query.order_by(SecFiling.filing_date.desc())
+        else:
+            query = query.order_by(SecFiling.filing_date.asc())
+        
+        unprocessed = query.limit(limit).all()
         
         summary["filings_to_process"] = len(unprocessed)
         
@@ -475,8 +487,13 @@ async def process_unprocessed_filings(limit: int = 10) -> Dict[str, Any]:
                     await summarize_filing_with_llm(filing)
                     summary["summaries_generated"] += 1
                 
-                # Rate limiting
-                await asyncio.sleep(1)
+                # Mark as processed if we have a summary
+                if filing.llm_summary:
+                    filing.processed = True
+                    db.commit()
+                
+                # Rate limiting - be nice to SEC and LLM API
+                await asyncio.sleep(2)
                 
             except Exception as exc:
                 error_msg = f"Error processing {filing.accession_number}: {exc}"
