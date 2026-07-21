@@ -257,6 +257,17 @@ class PipelineService:
                 extraction_model=extraction_model or None,
                 symbol_proxy_terms_by_symbol=symbol_proxy_terms_by_symbol,
             )
+            # Merge stage_metrics from sentiment trace (contains stage1/stage2 details)
+            trace_stage_metrics = sentiment_trace.get("stage_metrics", {})
+            if trace_stage_metrics:
+                for key, value in trace_stage_metrics.items():
+                    if key in stage_metrics:
+                        # Merge details if both exist
+                        if isinstance(stage_metrics[key], dict) and isinstance(value, dict):
+                            stage_metrics[key].update(value)
+                    else:
+                        stage_metrics[key] = value
+            
             stage_metrics["sentiment"] = {
                 "status": "completed",
                 "model_name": self.model_name,

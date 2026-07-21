@@ -1,3 +1,125 @@
+# Release Notes — January 16, 2027
+
+## Fix: Concurrent Run Conflict + Pending Order Cancellation — No More Simultaneous Opposing Positions
+
+Fixed a critical bug where the system could open both LONG and SHORT positions for the same underlying (e.g., SPXL long + SPXS short) when multiple analysis runs fired concurrently or when pending unfilled orders from previous runs conflicted with new signals.
+
+### Problem 1: Concurrent Run Race Condition
+When two analysis runs executed simultaneously (e.g., cron overlap), neither saw the other's uncommitted position:
+```
+T=0.000s  Run A: starts, reads DB (no SPXL yet)
+T=0.001s  Run B: starts, reads DB (no SPXS yet)
+T=0.002s  Run A: overlap_guard("SPY", "LONG") → allowed
+T=0.003s  Run B: overlap_guard("SPY", "SHORT") → allowed (different key!)
+T=0.004s  Run A: commits SPXL position
+T=0.005s  Run B: commits SPXS position
+T=0.006s  Result: BOTH positions open ← BUG
+```
+
+**Root cause:** The original overlap guard only blocked identical `(underlying, signal_type)` pairs. `("SPY", "LONG")` and `("SPY", "SHORT")` were treated as different keys, so both runs were allowed to proceed.
+
+### Problem 2: Pending Unfilled Order Conflict
+A previous run submitted a MARKET order that couldn't fill until market open:
+```
+6:00 AM  → Run A: SHORT SPY → submits MARKET order for SPXS
+           (market closed, order PENDING)
+
+8:30 AM  → Run B: LONG SPY → submits MARKET order for SPXL
+           (now BOTH orders pending!)
+
+Market opens → Both orders fill → SPXL long + SPXS short = CONFLICT!
+```
+
+**Root cause:** The system checked committed positions but NOT pending unfilled orders from previous runs.
+
+---
+
+### Fix 1: Underlying-Level Lock (Prevents Concurrent Run Conflicts)
+**File:** `backend/services/paper_trading.py`  
+**Change:** Added `_cron_overlap_underlying_keys` dictionary that tracks when ANY signal for an underlying was last processed.
+
+**How it works:**
+- Before processing any signal, check if the underlying was processed within the last 5 minutes
+- If yes → SKIP the trade (logs: `"cron_overlap_guard_underlying"`)
+- If no → Allow the trade and set the underlying lock
+- Both the underlying-level lock AND signal-type-level lock are now set
+
+**Result:** If Run A processes SPY, Run B can't process SPY again for 5 minutes → only one position opened per underlying within the grace window.
+
+---
+
+### Fix 2: Pending Order Cancellation (Prevents Unfilled Order Conflicts)
+**Files:** `backend/services/alpaca_broker.py` and `backend/services/paper_trading.py`  
+**Change:** Before dispatching new orders, system now checks for pending orders from previous runs that conflict with the current run's intentions and cancels them.
+
+**How it works:**
+1. Fetches all pending orders from Alpaca (`get_pending_orders()`)
+2. Builds a map of what the current run wants (underlying → signal_type)
+3. For each pending order, determines the underlying and direction (bull/bear)
+4. If the pending order conflicts with the current run's intention → CANCEL it
+5. Then submits the new order
+
+**Example:**
+- Previous run submitted PENDING order for SPXS (SHORT SPY)
+- Current run wants to buy SPXL (LONG SPY)
+- System CANCELS the pending SPXS order
+- Then submits the SPXL order
+- Result: Only SPXL fills → no conflict
+
+**Result:** When Run B tries to open SPXL at 8:30 AM, it will CANCEL the pending SPXS order first → only SPXL fills.
+
+---
+
+### Files Changed
+- `backend/services/paper_trading.py` — Added underlying-level overlap lock + pending order cancellation logic
+- `backend/services/alpaca_broker.py` — Added `get_pending_orders()` method to `AlpacaBroker` class
+
+---
+
+### Testing
+
+**Test 1: Verify Pending Order Cancellation**
+1. Submit a manual SHORT order for SPY (via Admin UI or directly to Alpaca) → creates pending SPXS order
+2. Trigger a new analysis run that wants to go LONG SPY
+3. Check logs for:
+   ```
+   [alpaca] CANCELLED pending conflicting order: SPXS (underlying=SPY, side=sell, order_id=...) — current run wants LONG
+   ```
+4. Verify only SPXL order is pending/submitted
+
+**Test 2: Verify Underlying-Level Lock**
+1. Trigger two concurrent analysis runs (or manually fire two runs within 5 minutes)
+2. Check logs for:
+   ```
+   [paper] SPY LONG: skipped — cron overlap guard (underlying already processed within 5min)
+   ```
+3. Verify only one position is opened
+
+---
+
+### Monitoring
+Add these log checks to your monitoring:
+```bash
+# Check for pending order cancellations
+grep "CANCELLED pending conflicting order" backend.log
+
+# Check for underlying-level lock blocking concurrent runs
+grep "cron_overlap_guard_underlying" backend.log
+
+# Check for conflict resolution cleaning up positions
+grep "conflict:" backend.log
+```
+
+---
+
+### Backwards Compatibility
+All changes are backwards compatible:
+- **Paper trading only:** No behavior change. The underlying-level lock prevents concurrent run conflicts.
+- **Alpaca live trading:** The pending order cancellation prevents unfilled order conflicts. If Alpaca is not configured, this logic is skipped.
+- **Existing positions:** The conflict resolution at the start of `process_signals()` still cleans up any opposing positions that might exist from before this fix.
+
+---
+
 # Release Notes — July 19, 2026
 
 ## Fix: Inference Backend Auto-Detection — Local and Cloud LLMs Now Work Simultaneously

@@ -106,6 +106,7 @@ class SentimentService:
         stage_metrics: Dict[str, Dict[str, Any]] = {}
 
         stage1_model = extraction_model or model_name
+        print(f"[DEBUG] stage1_model='{stage1_model}', extraction_model='{extraction_model}', model_name='{model_name}'")
         if stage1_model:
             stage1_started = time.time()
             print(f"Stage 1: starting keyword gen for {len(symbols)} symbols (model={stage1_model})...")
@@ -116,6 +117,8 @@ class SentimentService:
                 persisted_proxy_terms_by_symbol=symbol_proxy_terms_by_symbol,
             )
             print(f"Stage 1: keyword gen complete — {len(stage1_result['filtered_posts'])}/{len(posts)} articles passed filter")
+            print(f"[DEBUG] stage1_result keys: {list(stage1_result.keys()) if stage1_result else 'None'}")
+            print(f"[DEBUG] posts_by_symbol counts: { {sym: len(posts) for sym, posts in stage1_result.get('posts_by_symbol', {}).items()} if stage1_result else 'N/A' }")
             stage1_duration_ms = (time.time() - stage1_started) * 1000
             analysis_posts = stage1_result["filtered_posts"]
             proxy_terms_by_symbol = stage1_result["proxy_terms_by_symbol"]
@@ -159,8 +162,7 @@ class SentimentService:
         posts_by_symbol: Dict[str, List[Any]] = (
             (stage1_result or {}).get("posts_by_symbol") or {}
         )
-
-        # ── Stage 2: per-symbol reasoning ────────────────────────────────────────
+        print(f"[DEBUG] posts_by_symbol extracted: { {sym: len(posts) for sym, posts in posts_by_symbol.items()} if posts_by_symbol else 'empty dict' }")
         effective_reasoning_model = reasoning_model or model_name
         stage2_started = time.time()
         stage2_symbol_count = len(symbols)
@@ -169,6 +171,7 @@ class SentimentService:
             sym_posts = posts_by_symbol.get(symbol)
             _B = "\033[94m"; _X = "\033[0m"
             print(f"Stage 2 [{index+1}/{stage2_symbol_count}]: analyzing {_B}{symbol}{_X}...")
+            print(f"[DEBUG] Stage 2 {symbol}: sym_posts count={len(sym_posts) if sym_posts else 'None'}, analysis_posts count={len(analysis_posts)}")
             # Skip the LLM entirely when no articles matched this symbol —
             # saves tokens and produces a clear "no data" message instead of boilerplate.
             if sym_posts is not None and len(sym_posts) == 0:
@@ -346,6 +349,7 @@ class SentimentService:
             },
             "stage2_runs_by_symbol": stage2_runs_by_symbol,
         }
+        print(f"[DEBUG] FINAL trace posts_by_symbol_counts: {trace.get('stage_metrics', {}).get('stage2', {}).get('details', {}).get('posts_by_symbol_counts', {})}")
 
         return results, trace
 
@@ -383,6 +387,15 @@ class SentimentService:
         fallback: str,
         proxy_terms: Optional[List[str]] = None,
     ) -> str:
+        # If posts are provided (from Stage 1 per-symbol filtering), use them directly
+        # without re-filtering. Re-filtering is redundant and can fail due to text
+        # normalization mismatches between Stage 1 and Stage 2.
+        if posts and len(posts) > 0:
+            relevant_context = self._build_aggregated_news_context(posts)
+            if relevant_context:
+                return relevant_context
+        
+        # Fallback: try filtering with proxy terms
         raw_terms = list(proxy_terms or []) or SYMBOL_RELEVANCE_TERMS.get(symbol.upper(), [])
         terms = expand_proxy_terms_for_matching(raw_terms)
         if not terms:

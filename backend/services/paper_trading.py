@@ -22,9 +22,13 @@ _MARKET_TZ = ZoneInfo("America/New_York")
 # ── OVERLAP COOLDOWN TRACKING (module-level, persists across runs) ────
 # _cron_overlap_keys[(underlying, signal_type)] = utc datetime
 #   Prevents duplicate orders when multiple analysis runs fire simultaneously.
+# _cron_overlap_underlying_keys[underlying] = utc datetime
+#   Prevents concurrent runs from opening OPPOSING positions for the same
+#   underlying (e.g., SPXL long + SPXS short in the same dispatch cycle).
 # _last_order_times[symbol] = utc datetime
 #   Prevents manual+auto duplicate orders for the same symbol.
 _cron_overlap_keys: Dict[Tuple[str, str], datetime] = {}
+_cron_overlap_underlying_keys: Dict[str, datetime] = {}
 _last_order_times: Dict[str, datetime] = {}
 
 # 24/5 trading schedule (Alpaca: Sun 8 PM ET → Fri 8 PM ET)
@@ -832,11 +836,37 @@ def process_signals(
         # type creates the PaperTrade; subsequent runs within the grace
         # window skip silently.
         #
-        # Direction flips (LONG↔SHORT) are NOT blocked — only identical
-        # signal types collide.  HOLD signals are also tracked separately
-        # so a HOLD doesn't block a directional entry and vice versa.
+        # CRITICAL: Also blocks ANY signal for the same underlying within
+        # the grace window to prevent opposing positions (SPXL long +
+        # SPXS short) from being opened by concurrent runs.  This is
+        # the fix for the race condition where two runs could
+        # simultaneously open opposing positions before either commits.
         _OVERLAP_GRACE_MINUTES = 5
         _now_utc = _safe_utc(datetime.now(timezone.utc))
+        
+        # Check underlying-level lock first (blocks LONG+SHORT concurrently)
+        _underlying_key = underlying
+        _underlying_prev = _cron_overlap_underlying_keys.get(_underlying_key)
+        if _underlying_prev is not None and _now_utc < _underlying_prev + timedelta(minutes=_OVERLAP_GRACE_MINUTES):
+            _skip_summary = {
+                "underlying": underlying,
+                "execution_ticker": execution_ticker,
+                "signal_type": signal_type,
+                "leverage": leverage,
+                "conviction_level": conviction_level,
+                "trading_type": trading_type,
+                "session": session["label"],
+                "action": "skipped",
+                "reason": "cron_overlap_guard_underlying",
+            }
+            print(
+                f"[paper] {underlying} {signal_type}: skipped — cron overlap guard "
+                f"(underlying already processed within {_OVERLAP_GRACE_MINUTES}min)"
+            )
+            actions.append(_skip_summary)
+            continue
+        
+        # Check signal-type-level lock (original behavior)
         _overlap_key = (underlying, signal_type)
         _prev = _cron_overlap_keys.get(_overlap_key)
         if _prev is not None and _now_utc < _prev + timedelta(minutes=_OVERLAP_GRACE_MINUTES):
@@ -857,6 +887,10 @@ def process_signals(
             )
             actions.append(_skip_summary)
             continue
+        
+        # Set BOTH locks: underlying (blocks concurrent opposing signals)
+        # and signal-type (blocks duplicate same-signal entries)
+        _cron_overlap_underlying_keys[_underlying_key] = _now_utc
         _cron_overlap_keys[_overlap_key] = _now_utc
 
         # Get price for the execution ticker (the actual security being traded).
@@ -1643,6 +1677,68 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
             _live_broker = get_broker_from_keychain(mode=_alpaca_mode) if _alpaca_mode != "off" else None
         except Exception:
             _live_broker = None
+
+        # ── Cancel pending conflicting orders ─────────────────────────────
+        # Before dispatching opens, check for pending orders from previous runs
+        # that conflict with the current run's intentions.  For example,
+        # if a previous run submitted a MARKET order for SPXS (SHORT SPY)
+        # that hasn't filled yet, and the current run wants to buy SPXL
+        # (LONG SPY), we must CANCEL the pending SPXS order before
+        # submitting the SPXL order to prevent both from filling.
+        if _live_broker and unique_opens:
+            try:
+                _pending_orders = _live_broker.get_pending_orders()
+                if _pending_orders:
+                    # Build a map of what the current run wants
+                    _intended_positions: Dict[str, str] = {}  # underlying -> signal_type
+                    for trade, event in unique_opens:
+                        _sym = str(getattr(trade, "underlying", "") or "").upper()
+                        _sig = str(getattr(trade, "signal_type", "") or "").upper()
+                        if _sym:
+                            _intended_positions[_sym] = _sig
+                    
+                    # Check each pending order for conflict
+                    from services.trading_instruments import build_ticker_bucket_map
+                    _bucket_map = build_ticker_bucket_map()
+                    
+                    for _order in _pending_orders:
+                        _order_symbol = str(_order.get("symbol", "") or "").upper()
+                        _order_side = str(_order.get("side", "") or "").lower()
+                        _order_id = str(_order.get("id", "") or "")
+                        
+                        # Determine the underlying for this pending order
+                        _order_info = _bucket_map.get(_order_symbol)
+                        if _order_info:
+                            _order_underlying = _order_info[0]
+                            _order_bucket = _order_info[1]  # "bull" or "bear"
+                        else:
+                            _order_underlying = _order_symbol
+                            _order_bucket = "bull" if _order_side == "buy" else "bear"
+                        
+                        # Check if the current run intends to open a position for this underlying
+                        _intended_signal = _intended_positions.get(_order_underlying)
+                        if not _intended_signal:
+                            continue  # No conflict, current run doesn't touch this underlying
+                        
+                        # Determine if there's a conflict
+                        _order_is_long = (_order_side == "buy" and _order_bucket == "bull") or \
+                                         (_order_side == "sell" and _order_bucket == "bear")
+                        _intended_is_long = (_intended_signal == "LONG")
+                        
+                        if _order_is_long != _intended_is_long:
+                            # CONFLICT! Cancel the pending order
+                            try:
+                                _live_broker.cancel_order(_order_id)
+                                print(
+                                    f"[alpaca] CANCELLED pending conflicting order: "
+                                    f"{_order_symbol} (underlying={_order_underlying}, "
+                                    f"side={_order_side}, order_id={_order_id}) "
+                                    f"— current run wants {_intended_signal}"
+                                )
+                            except Exception as _cancel_err:
+                                print(f"[alpaca] FAILED to cancel pending order {_order_id}: {_cancel_err}")
+            except Exception as _pending_err:
+                print(f"[alpaca] pending order check failed (non-fatal): {_pending_err}")
 
         _skipped_opens = 0
         for trade, event in unique_opens:

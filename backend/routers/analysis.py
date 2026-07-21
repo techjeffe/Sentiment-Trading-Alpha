@@ -1410,6 +1410,10 @@ async def analyze_market_stream(
             # ── Verbose diagnostics ─────────────────────────────────────────
             # Articles that were ingested and passed Stage 0
             model_inputs = response.model_inputs
+            print(f"[DEBUG] response.model_inputs type: {type(model_inputs)}")
+            print(f"[DEBUG] response.model_inputs value: {model_inputs}")
+            if model_inputs:
+                print(f"[DEBUG] model_inputs.articles count: {len(model_inputs.articles) if model_inputs.articles else 0}")
             if model_inputs and model_inputs.articles:
                 _msg = f'▶ {response.posts_scraped} articles ingested — {len(model_inputs.articles)} selected for analysis'
                 print(f"[stream] {_msg}")

@@ -242,6 +242,11 @@ class AlpacaBroker:
     def get_position(self, symbol: str) -> Dict[str, Any]:
         return self._get(f"/v2/positions/{symbol.upper()}")
 
+    def get_pending_orders(self) -> List[Dict[str, Any]]:
+        """Get all open/pending orders that haven't been filled yet."""
+        result = self._get("/v2/orders", params={"status": "open"})
+        return result if isinstance(result, list) else []
+
     def get_order(self, order_id: str) -> Dict[str, Any]:
         return self._get(f"/v2/orders/{order_id}")
 
