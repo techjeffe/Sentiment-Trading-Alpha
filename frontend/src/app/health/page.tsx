@@ -142,19 +142,7 @@ export default function HealthPage() {
         titleGradient="from-emerald-400 to-cyan-300"
         subtitle="Live runtime, model, and data-pull status for Sentiment Trading Alpha"
         py="py-4"
-      >
-        <div className="flex items-center gap-3">
-          <Link href="/" className="text-xs text-slate-300 hover:text-white border border-slate-700 rounded-lg px-3 py-2">
-            Dashboard
-          </Link>
-          <Link href="/admin" className="text-xs text-blue-300 hover:text-blue-200 border border-blue-500/20 rounded-lg px-3 py-2">
-            Admin
-          </Link>
-          <Link href="/about" className="text-xs text-slate-300 hover:text-white border border-slate-700 rounded-lg px-3 py-2">
-            About
-          </Link>
-        </div>
-      </AppHeader>
+      />
 
       <main className="max-w-6xl mx-auto px-6 py-10 space-y-6">
         <GlassCard>

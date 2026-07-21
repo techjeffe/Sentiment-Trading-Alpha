@@ -1,4 +1,42 @@
-# Release Notes — January 20, 2027
+# Release Notes — July 21, 2026
+
+## Feature: Unified Global Navigation — Persistent Shell Across All Pages
+
+Refactored the entire frontend to use a consistent, persistent navigation shell. Previously, the header and navigation elements varied wildly by page, and the `/alpha` route was completely orphaned without a link.
+
+### What Changed
+- **Persistent GlobalNav component** — A unified top-bar navigation now renders identically across all routes (`/`, `/trading`, `/alpha`, `/news`, `/health`, `/admin`, `/about`)
+- **`/alpha` route integrated** — Alpha Analytics is now formally wired into the primary navigation menu and easily discoverable
+- **Standardized navigation order** — Dashboard → Trading → Alpha Analytics → News & Filings → System Health → Admin → About
+- **Removed disparate back-buttons** — Eliminated scattered "← Dashboard", "← Back", and "Back Home" links across sub-pages
+- **Active-state styling unified** — Consistent highlighting, status badges, and typography across the header container
+- **Page-specific sub-tabs preserved** — Signal/History/Compare/Debug tabs remain scoped below the main header as a secondary local action bar
+- **Modular layout wrapper** — All future pages automatically inherit the standard navigation framework
+- **Responsive mobile menu** — Hamburger toggle with full navigation access on small screens
+
+### Pages Updated
+- `app/layout.tsx` — Now includes GlobalNav component
+- `app/page.tsx` (Dashboard) — Removed page-specific navigation links
+- `app/health/page.tsx` — Removed page-specific navigation links  
+- `app/alpha/page.tsx` — Removed "← Dashboard" link
+- `app/news/page.tsx` — Removed "← Dashboard" link
+- `app/about/page.tsx` — Removed page-specific navigation links
+- `app/trading/page.tsx` — Removed "Dashboard" link
+- `app/secret/page.tsx` — Removed "Back Home" link
+- `components/GlobalNav.tsx` *(new)* — Persistent navigation component
+
+### Files Changed
+- `frontend/src/app/layout.tsx` — Added GlobalNav import and rendering
+- `frontend/src/components/GlobalNav.tsx` *(new)* — Unified navigation component with desktop/mobile views
+- `frontend/src/app/page.tsx` — Removed navigation links from AppHeader
+- `frontend/src/app/health/page.tsx` — Removed navigation links from AppHeader
+- `frontend/src/app/alpha/page.tsx` — Removed "← Dashboard" link
+- `frontend/src/app/news/page.tsx` — Removed "← Dashboard" link
+- `frontend/src/app/about/page.tsx` — Removed navigation links from AppHeader
+- `frontend/src/app/trading/page.tsx` — Removed "Dashboard" link
+- `frontend/src/app/secret/page.tsx` — Removed "Back Home" link
+
+---
 
 ## Feature: SEC EDGAR Filings Integration
 

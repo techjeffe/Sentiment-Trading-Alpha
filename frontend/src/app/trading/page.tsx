@@ -877,9 +877,6 @@ export default function TradingPage() {
                         <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
                         Refresh
                     </button>
-                    <Link href="/" className="text-xs text-slate-400 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5">
-                        Dashboard
-                    </Link>
                     <button
                         type="button"
                         onClick={handleReset}

@@ -658,33 +658,7 @@ export default function Home() {
                         <p className="text-slate-500 text-xs mt-0.5">{trackedSymbols.join(" · ")} | Geopolitical Sentiment Pipeline</p>
                     </button>
                 }
-            >
-                <div className="flex items-center gap-3 shrink-0">
-                    {error && (
-                        <span className="flex items-center gap-1.5 text-xs bg-red-500/10 text-red-400 px-2.5 py-1 rounded-full border border-red-500/20">
-                            <WifiOff size={11} /> {isOllamaError ? "Ollama" : "Error"}
-                        </span>
-                    )}
-                    <div className="text-right hidden sm:block">
-                        <p className="text-[11px] text-slate-500">Status</p>
-                        <p className={`text-xs font-semibold ${isAnalyzing ? "text-yellow-400" : result ? "text-emerald-400" : "text-slate-400"}`}>
-                            {isAnalyzing ? "Analyzing…" : result ? "Ready" : "Idle"}
-                        </p>
-                    </div>
-                    <Link href="/trading" className="text-xs text-emerald-400 hover:text-emerald-200 border border-emerald-500/20 rounded-lg px-2.5 py-1.5">
-                        Trading
-                    </Link>
-                    <Link href="/about" className="text-xs text-slate-400 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5">
-                        About
-                    </Link>
-                    <Link href="/health" className="text-xs text-emerald-400 hover:text-emerald-200 border border-emerald-500/20 rounded-lg px-2.5 py-1.5">
-                        Health
-                    </Link>
-                    <Link href="/admin" className="text-xs text-blue-400 hover:text-blue-200 border border-blue-500/20 rounded-lg px-2.5 py-1.5">
-                        Admin
-                    </Link>
-                </div>
-            </AppHeader>
+            />
 
             <main className="max-w-6xl mx-auto px-6 py-8">
                 {/* ── Tab navigation ── */}
@@ -707,6 +681,7 @@ export default function Home() {
                         );
                     })}
                     <div className="w-px h-5 bg-slate-700/60 mx-1" />
+                    <div className="w-px h-5 bg-slate-700/60 mx-1" />
                     <button
                         type="button"
                         onClick={() => setAdvancedMode((current) => !current)}
@@ -718,24 +693,6 @@ export default function Home() {
                     >
                         {advancedMode ? "Adv" : "Std"}
                     </button>
-                    <div className="w-px h-5 bg-slate-700/60 mx-1" />
-                    <Link
-                        href="/news"
-                        className="rounded-lg py-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors text-blue-400 hover:text-blue-200 hover:bg-blue-900/30 border border-blue-500/30"
-                        title="News & Filings — RSS, Truth Social, EDGAR"
-                    >
-                        📰 News
-                    </Link>
-                    <div className="w-px h-5 bg-slate-700/60 mx-1" />
-                    {advancedMode && (
-                        <Link
-                            href="/alpha"
-                            className="rounded-lg py-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors text-violet-400 hover:text-violet-200 hover:bg-violet-900/30 border border-violet-500/30"
-                            title="Alpha Analytics — IC, attribution, perturbation testing"
-                        >
-                            α Alpha
-                        </Link>
-                    )}
                 </nav>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 

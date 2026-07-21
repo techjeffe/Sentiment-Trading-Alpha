@@ -171,6 +171,18 @@ docker compose up --build
 
 ## 🖥️ What You'll See
 
+### Unified Navigation
+All pages now share a consistent, persistent top-bar navigation shell. The global nav includes:
+- **Dashboard** — Main sentiment analysis and signal generation
+- **Trading** — Paper trading simulator and Alpaca live trading
+- **Alpha Analytics** — Performance metrics, IC, attribution, perturbation testing
+- **News & Filings** — Browse RSS articles, Truth Social posts, and SEC EDGAR filings
+- **System Health** — Live runtime, model, and data-pull status
+- **Admin** — Configuration UI for all system settings
+- **About** — Builder notes and project disclaimer
+
+No more hunting for pages or encountering orphaned routes — everything is discoverable from any page.
+
 ### Dashboard
 - **Live News Feed** — See what the AI is reading in real-time
 - **Trade Signals** — Clear BUY/SELL/HOLD recommendations

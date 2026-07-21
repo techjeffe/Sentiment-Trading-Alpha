@@ -148,7 +148,6 @@ export default function AlphaPage() {
             value={symbolFilter}
             onChange={e => setSymbolFilter(e.target.value.toUpperCase())}
           />
-          <Link href="/" className="text-xs text-slate-400 hover:text-slate-200 transition-colors">← Dashboard</Link>
           <button
             onClick={load}
             disabled={loading}
