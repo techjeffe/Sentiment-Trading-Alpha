@@ -32,6 +32,7 @@ def migrate():
         for column_name, column_type, default_value in [
             ("data_ingestion_interval_seconds", "INTEGER", "900"),
             ("snapshot_retention_limit", "INTEGER", "12"),
+            ("trade_retention_days", "INTEGER", "90"),
             ("custom_symbols", "JSON", "'[]'"),
             ("display_timezone", "VARCHAR(64)", "''"),
             ("symbol_company_aliases", "JSON", "'{}'"),

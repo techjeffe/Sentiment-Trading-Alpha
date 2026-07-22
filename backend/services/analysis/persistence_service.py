@@ -14,20 +14,26 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
 from database.models import AnalysisResult, PaperTrade, ScrapedArticle, Trade
-from database.models import TradeExecution, TradeSnapshot, TradingSignal as TradingSignalModel
+from database.models import TradeClose, TradeExecution, TradeSnapshot, TradingSignal as TradingSignalModel
 from schemas.analysis import AnalysisResponse
 from services.data_ingestion.worker import build_analysis_posts
 from services.runtime_health import record_analysis_result
 from services.paper_trading import process_signals as paper_process_signals
 from services.pnl_tracker import persist_recommendation_trades
 from services.remote_snapshot import trigger_remote_snapshot_delivery
-from services.app_config import get_or_create_app_config, DEFAULT_SNAPSHOT_RETENTION_LIMIT
+from services.app_config import (
+    get_or_create_app_config,
+    DEFAULT_SNAPSHOT_RETENTION_LIMIT,
+    DEFAULT_TRADE_RETENTION_DAYS,
+    MIN_TRADE_RETENTION_DAYS,
+    MAX_TRADE_RETENTION_DAYS,
+)
 
 
 class PersistenceService:
@@ -178,7 +184,22 @@ class PersistenceService:
         }
 
     def prune_saved_analyses(self, db: Session, keep_limit: int = 100) -> None:
-        """Keep only the most recent saved analyses and delete related trade history for older ones."""
+        """Keep only the most recent saved analyses.
+
+        Deliberately does NOT touch Trade / TradeSnapshot / TradeExecution.
+        Analysis snapshots are large blobs (scraped posts, dataset dumps) worth
+        pruning aggressively; trade rows are tiny and are the only record of
+        realized forward returns, which the /alpha IC, attribution and
+        perturbation analytics depend on. Deleting trades on the analysis clock
+        (12 runs ≈ 6 hours) made every horizon beyond 1h permanently unreachable,
+        since a 1d/3d/1w snapshot cannot resolve before its trade is erased.
+
+        Trades are pruned separately and on a much longer clock — see
+        `prune_stale_trades`. Trades whose parent analysis has been pruned are
+        left with a dangling `analysis_id`; nothing joins in that direction
+        except `list_analysis_snapshots`, which walks analysis → trade and so
+        simply does not see them.
+        """
         normalized_limit = max(1, min(100, int(keep_limit)))
         stale_analyses = (
             db.query(AnalysisResult)
@@ -190,16 +211,39 @@ class PersistenceService:
             return
 
         stale_analysis_ids = [analysis.id for analysis in stale_analyses]
-        stale_trades = db.query(Trade).filter(Trade.analysis_id.in_(stale_analysis_ids)).all()
-        stale_trade_ids = [trade.id for trade in stale_trades]
-
-        if stale_trade_ids:
-            db.query(TradeExecution).filter(TradeExecution.trade_id.in_(stale_trade_ids)).delete(synchronize_session=False)
-            db.query(TradeSnapshot).filter(TradeSnapshot.trade_id.in_(stale_trade_ids)).delete(synchronize_session=False)
-            db.query(Trade).filter(Trade.id.in_(stale_trade_ids)).delete(synchronize_session=False)
-
         db.query(TradingSignalModel).filter(TradingSignalModel.analysis_id.in_(stale_analysis_ids)).delete(synchronize_session=False)
         db.query(AnalysisResult).filter(AnalysisResult.id.in_(stale_analysis_ids)).delete(synchronize_session=False)
+
+    def prune_stale_trades(self, db: Session, retention_days: int = DEFAULT_TRADE_RETENTION_DAYS) -> int:
+        """Delete trades (and their snapshots/executions) older than the retention window.
+
+        Time-based rather than count-based so the window is expressed in the same
+        units as the forward horizons it must outlive. The floor of
+        MIN_TRADE_RETENTION_DAYS guarantees the window always exceeds the longest
+        tracked horizon (1w), so a trade can never be deleted before its final
+        snapshot has had a chance to resolve.
+
+        Returns the number of trades deleted.
+        """
+        normalized_days = max(MIN_TRADE_RETENTION_DAYS, min(MAX_TRADE_RETENTION_DAYS, int(retention_days)))
+        cutoff = datetime.now(timezone.utc) - timedelta(days=normalized_days)
+
+        stale_trade_ids = [
+            row[0] for row in db.query(Trade.id).filter(Trade.recommended_at < cutoff).all()
+        ]
+        if not stale_trade_ids:
+            return 0
+
+        # Chunked so a large backlog cannot blow past SQLite's variable limit.
+        deleted = 0
+        for start in range(0, len(stale_trade_ids), 500):
+            chunk = stale_trade_ids[start:start + 500]
+            db.query(TradeExecution).filter(TradeExecution.trade_id.in_(chunk)).delete(synchronize_session=False)
+            db.query(TradeSnapshot).filter(TradeSnapshot.trade_id.in_(chunk)).delete(synchronize_session=False)
+            db.query(TradeClose).filter(TradeClose.trade_id.in_(chunk)).delete(synchronize_session=False)
+            deleted += db.query(Trade).filter(Trade.id.in_(chunk)).delete(synchronize_session=False)
+
+        return deleted
 
     # ── Internal (private) ───────────────────────────────────────────────
 
@@ -428,6 +472,10 @@ class PersistenceService:
                 print(f"Paper trading hook error: {_pe}\n{_tb.format_exc()}")
             retention_limit = int(getattr(config, "snapshot_retention_limit", DEFAULT_SNAPSHOT_RETENTION_LIMIT))
             self.prune_saved_analyses(db, retention_limit)
+            trade_retention_days = int(getattr(config, "trade_retention_days", DEFAULT_TRADE_RETENTION_DAYS) or DEFAULT_TRADE_RETENTION_DAYS)
+            _pruned_trades = self.prune_stale_trades(db, trade_retention_days)
+            if _pruned_trades:
+                print(f"[retention] pruned {_pruned_trades} trade(s) older than {trade_retention_days}d")
             db.commit()
             trigger_remote_snapshot_delivery(request_id)
         except Exception as e:

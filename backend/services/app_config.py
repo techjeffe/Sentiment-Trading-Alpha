@@ -63,6 +63,13 @@ MAX_CUSTOM_RSS_FEEDS = 3
 MAX_TRACKED_SYMBOLS = len(SUPPORTED_SYMBOLS) + MAX_CUSTOM_SYMBOLS
 DEFAULT_ESTIMATED_ANALYSIS_SECONDS = 82
 DEFAULT_SNAPSHOT_RETENTION_LIMIT = 12
+# Trade/TradeSnapshot rows are the only record of realized forward returns and
+# are tiny, so they are kept far longer than analysis snapshots (which are large
+# blobs). The floor exists because a trade pruned before its longest horizon
+# (1w) matures can never produce a 1w return.
+DEFAULT_TRADE_RETENTION_DAYS = 90
+MIN_TRADE_RETENTION_DAYS = 14
+MAX_TRADE_RETENTION_DAYS = 3650
 DEFAULT_RSS_FEED_URLS = [feed["url"] for feed in DEFAULT_RSS_FEEDS]
 DEFAULT_RISK_POLICY: Dict[str, Any] = {
     "crazy_ramp": {
@@ -549,6 +556,7 @@ def _maybe_import_legacy_app_config(db: Session) -> AppConfig | None:
         rss_article_limits=_normalize_rss_article_limits(parse_json(row_value("rss_article_limits", {}), {})),
         data_ingestion_interval_seconds=int(row_value("data_ingestion_interval_seconds", 900) or 900),
         snapshot_retention_limit=int(row_value("snapshot_retention_limit", DEFAULT_SNAPSHOT_RETENTION_LIMIT) or DEFAULT_SNAPSHOT_RETENTION_LIMIT),
+        trade_retention_days=int(row_value("trade_retention_days", DEFAULT_TRADE_RETENTION_DAYS) or DEFAULT_TRADE_RETENTION_DAYS),
         web_research_enabled=bool(row_value("web_research_enabled", True)),
         allow_extended_hours_trading=bool(row_value("allow_extended_hours_trading", True)),
         remote_snapshot_enabled=bool(row_value("remote_snapshot_enabled", False)),
@@ -767,6 +775,9 @@ def get_or_create_app_config(db: Session) -> AppConfig:
         if getattr(config, "snapshot_retention_limit", None) is None:
             config.snapshot_retention_limit = DEFAULT_SNAPSHOT_RETENTION_LIMIT
             changed = True
+        if getattr(config, "trade_retention_days", None) is None:
+            config.trade_retention_days = DEFAULT_TRADE_RETENTION_DAYS
+            changed = True
         if getattr(config, "web_research_enabled", None) is None:
             config.web_research_enabled = True
             changed = True
@@ -885,6 +896,7 @@ def get_or_create_app_config(db: Session) -> AppConfig:
         rss_article_limits=dict(DEFAULT_RSS_ARTICLE_LIMITS),
         data_ingestion_interval_seconds=900,
         snapshot_retention_limit=DEFAULT_SNAPSHOT_RETENTION_LIMIT,
+        trade_retention_days=DEFAULT_TRADE_RETENTION_DAYS,
         web_research_enabled=True,
         allow_extended_hours_trading=True,
         alpaca_execution_mode=DEFAULT_ALPACA_EXECUTION_MODE,
@@ -1013,6 +1025,12 @@ def update_app_config(db: Session, payload: Dict[str, Any]) -> AppConfig:
         except (TypeError, ValueError):
             value = getattr(config, "snapshot_retention_limit", DEFAULT_SNAPSHOT_RETENTION_LIMIT)
         config.snapshot_retention_limit = max(1, min(100, value))
+    if "trade_retention_days" in payload:
+        try:
+            value = int(payload.get("trade_retention_days"))
+        except (TypeError, ValueError):
+            value = getattr(config, "trade_retention_days", DEFAULT_TRADE_RETENTION_DAYS)
+        config.trade_retention_days = max(MIN_TRADE_RETENTION_DAYS, min(MAX_TRADE_RETENTION_DAYS, value))
     if "extraction_model" in payload:
         config.extraction_model = str(payload.get("extraction_model") or "").strip()
     if "reasoning_model" in payload:
@@ -1279,6 +1297,12 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         1,
         100,
     )
+    trade_retention_days = _coerce_int(
+        getattr(config, "trade_retention_days", DEFAULT_TRADE_RETENTION_DAYS),
+        DEFAULT_TRADE_RETENTION_DAYS,
+        MIN_TRADE_RETENTION_DAYS,
+        MAX_TRADE_RETENTION_DAYS,
+    )
     remote_snapshot_interval_minutes = _coerce_int(
         getattr(config, "remote_snapshot_interval_minutes", getattr(config, "remote_snapshot_heartbeat_minutes", 360)),
         360,
@@ -1354,6 +1378,7 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         "rss_articles_per_feed": resolve_rss_articles_per_feed(config),
         "data_ingestion_interval_seconds": data_ingestion_interval_seconds,
         "snapshot_retention_limit": snapshot_retention_limit,
+        "trade_retention_days": trade_retention_days,
         "extraction_model": str(getattr(config, "extraction_model", "") or ""),
         "reasoning_model": str(getattr(config, "reasoning_model", "") or ""),
         "ollama_parallel_slots": int(getattr(config, "ollama_parallel_slots", 1) or 1),
