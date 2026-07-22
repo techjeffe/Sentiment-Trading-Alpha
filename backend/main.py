@@ -26,12 +26,16 @@ from database.models import init_db
 from routers import router as analysis_router
 from routers import edgar as edgar_router
 from routers import news as news_router
-from services.app_config import config_to_dict_with_stats, get_or_create_app_config
+from services.app_config import config_to_dict_with_stats, get_or_create_app_config, try_acquire_analysis_lock, release_analysis_lock
 from services.pnl_tracker import PnLTracker, SCHEDULER_INTERVAL_SECONDS
 from services.data_ingestion.worker import run_ingestion_cycle
 from services.data_ingestion.yfinance_client import PriceClient
 from services.ollama import get_ollama_status
 from services.runtime_health import get_runtime_snapshot, record_data_pull, record_request
+from services.analysis.pipeline_service import PipelineService
+from services.analysis.cache_service import get_price_cache_service
+from schemas.analysis import AnalysisRequest
+from config.logic_loader import LOGIC as _L
 
 if sys.platform == "win32":
     try:
@@ -258,6 +262,161 @@ async def _weekly_feedback_scheduler_loop():
         await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
 
 
+async def _auto_analysis_scheduler_loop():
+    """Auto-analysis scheduler — runs sentiment analysis on configured interval.
+    
+    Triggers analysis when auto_run_enabled is true, using auto_run_interval_minutes
+    from the database config. Respects the analysis lock to prevent concurrent runs.
+    """
+    startup_grace_seconds = 30
+    print(f"Auto-analysis scheduler: waiting {startup_grace_seconds}s before first check")
+    await asyncio.sleep(startup_grace_seconds)
+    
+    while True:
+        try:
+            db = None
+            request_id = None
+            try:
+                db = SessionLocal()
+                config = get_or_create_app_config(db)
+                
+                # Check if auto-run is enabled
+                auto_run_enabled = bool(getattr(config, "auto_run_enabled", False))
+                if not auto_run_enabled:
+                    # Auto-run disabled, check again in 60 seconds
+                    await asyncio.sleep(60)
+                    continue
+                
+                # Get interval from config (default 30 minutes)
+                interval_minutes = int(getattr(config, "auto_run_interval_minutes", 30) or 30)
+                interval_seconds = interval_minutes * 60
+                
+                # Check if we should run analysis now
+                last_completed_at = getattr(config, "last_analysis_completed_at", None)
+                now = datetime.now(timezone.utc)
+                
+                should_run = False
+                if last_completed_at is None:
+                    should_run = True
+                else:
+                    # Ensure timezone-aware comparison
+                    if last_completed_at.tzinfo is None:
+                        last_completed_at = last_completed_at.replace(tzinfo=timezone.utc)
+                    seconds_since_last = (now - last_completed_at).total_seconds()
+                    should_run = seconds_since_last >= interval_seconds
+                
+                if not should_run:
+                    # Not time yet, sleep until next check
+                    if last_completed_at:
+                        seconds_since_last = (now - last_completed_at).total_seconds()
+                        seconds_until_next = max(0, interval_seconds - seconds_since_last)
+                    else:
+                        seconds_until_next = interval_seconds
+                    
+                    # Sleep in smaller increments to check for config changes
+                    sleep_interval = min(60, seconds_until_next)
+                    await asyncio.sleep(sleep_interval)
+                    continue
+                
+                # Try to acquire analysis lock
+                request_id = f"auto_{int(now.timestamp())}"
+                lock_acquired = try_acquire_analysis_lock(db, request_id, lease_seconds=600)
+                
+                if not lock_acquired:
+                    # Another analysis is running, retry later
+                    print("[auto-analysis] Skipped: analysis lock held by another process")
+                    await asyncio.sleep(30)
+                    continue
+                
+                print(f"[auto-analysis] Starting scheduled analysis (interval: {interval_minutes} min)")
+                
+                # Run the analysis
+                try:
+                    # Get tracked symbols from config
+                    symbols = config.tracked_symbols or ["USO", "IBIT", "QQQ", "SPY"]
+                    
+                    # Create analysis request with defaults
+                    request = AnalysisRequest(
+                        symbols=symbols,
+                        max_posts=50,
+                        include_backtest=True,
+                        lookback_days=14,
+                    )
+                    
+                    # Initialize services properly
+                    price_cache = get_price_cache_service()
+                    _ce = getattr(config, "continuous_entry_enabled", None)
+                    _ra = getattr(config, "regime_adaptation_enabled", None)
+                    _hd = getattr(config, "hold_decay_enabled", None)
+                    
+                    pipeline = PipelineService(
+                        db=db,
+                        price_cache=price_cache,
+                        logic_config=_L,
+                        continuous_entry_enabled=_ce,
+                        regime_adaptation_enabled=_ra,
+                        hold_decay_enabled=_hd,
+                    )
+                    
+                    result = await pipeline.run(
+                        request=request,
+                        db=db,
+                        config=config,
+                        prompt_overrides=config.symbol_prompt_overrides or {},
+                        article_ids=None,
+                        trigger_source="auto_scheduler",
+                    )
+                    
+                    print(f"[auto-analysis] Completed successfully")
+                    record_data_pull(
+                        status="success",
+                        source="auto_analysis",
+                        summary=f"Auto-analysis completed for {len(symbols)} symbols",
+                        details={"symbols": symbols, "request_id": request_id},
+                        error=None,
+                    )
+                    
+                except Exception as exc:
+                    print(f"[auto-analysis] Error during analysis: {exc}")
+                    import traceback
+                    traceback.print_exc()
+                    record_data_pull(
+                        status="error",
+                        source="auto_analysis",
+                        summary="Auto-analysis failed",
+                        details={"request_id": request_id},
+                        error=str(exc),
+                    )
+                finally:
+                    # Release the lock
+                    try:
+                        if db and request_id:
+                            release_analysis_lock(db, request_id)
+                    except Exception as release_exc:
+                        print(f"[auto-analysis] Warning: could not release lock: {release_exc}")
+                    
+            finally:
+                if db:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
+                
+        except asyncio.CancelledError:
+            print("[auto-analysis] Scheduler cancelled")
+            raise
+        except Exception as exc:
+            print(f"[auto-analysis] Scheduler error: {exc}")
+            import traceback
+            traceback.print_exc()
+            # Don't crash - wait and retry
+            await asyncio.sleep(60)
+            continue
+        
+        # Wait before next check
+        await asyncio.sleep(60)
+
+
 async def _edgar_polling_scheduler_loop():
     """Periodically poll SEC EDGAR for new filings from tracked companies."""
     from services.data_ingestion.edgar_worker import run_edgar_poll_cycle
@@ -319,6 +478,7 @@ async def lifespan(app: FastAPI):
     feedback_scheduler_task  = None
     telegram_bot_task        = None
     edgar_poll_task          = None
+    auto_analysis_task       = None
 
     print("=" * 60)
     print("3x Leveraged Sentiment Trading System - Starting...")
@@ -426,6 +586,9 @@ async def lifespan(app: FastAPI):
     edgar_poll_task = asyncio.create_task(_edgar_polling_scheduler_loop())
     print("EDGAR filings poll scheduler started (hourly interval)")
 
+    auto_analysis_task = asyncio.create_task(_auto_analysis_scheduler_loop())
+    print("Auto-analysis scheduler started (runs on configured interval)")
+
     try:
         from services.app_config import get_or_create_app_config
         from services.secret_store import get_telegram_credentials
@@ -469,6 +632,7 @@ async def lifespan(app: FastAPI):
         (feedback_scheduler_task, "feedback_scheduler"),
         (telegram_bot_task, "telegram_bot"),
         (edgar_poll_task, "edgar_poll"),
+        (auto_analysis_task, "auto_analysis"),
     ]:
         if task:
             task.cancel()

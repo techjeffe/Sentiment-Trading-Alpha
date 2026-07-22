@@ -17,6 +17,11 @@ from sqlalchemy.orm import Session
 
 from database.models import TradeSnapshot
 
+# Only the most recent N eligible decision-log rows are replayed. The response
+# reports this alongside the total so a partial sample is never mistaken for
+# the full history.
+SAMPLE_LIMIT = 500
+
 
 def run_perturbation(
     dl_db: Session,
@@ -40,7 +45,7 @@ def run_perturbation(
     Returns a dict with keys: baseline, nudge_up, nudge_down — each containing
     signal_count, avg_return_by_horizon, and blocked_count.
     """
-    horizons = horizons or ["4h", "1d", "3d", "1w"]
+    horizons = horizons or ["1h", "4h", "1d", "3d", "1w"]
 
     from database.engine import _decision_log_engine
     from sqlalchemy import text, bindparam
@@ -60,10 +65,23 @@ def run_perturbation(
           AND dls.blended_directional_score IS NOT NULL
           {sym_filter}
         ORDER BY dlr.started_at DESC
-        LIMIT 500
+        LIMIT {SAMPLE_LIMIT}
     """)
     params: Dict[str, Any] = {"sym": symbol} if symbol else {}
     rows = dl_db.execute(query, params).fetchall()
+
+    # Total eligible rows, so callers can tell that they are seeing only the
+    # most recent SAMPLE_LIMIT of a much larger history.
+    total_eligible = dl_db.execute(
+        text(f"""
+            SELECT COUNT(*)
+            FROM decision_log_symbol dls
+            WHERE dls.entry_threshold_used IS NOT NULL
+              AND dls.blended_directional_score IS NOT NULL
+              {sym_filter}
+        """),
+        params,
+    ).scalar() or 0
 
     if not rows:
         return {"error": "No historical rows with entry_threshold_used found", "rows_checked": 0}
@@ -128,15 +146,33 @@ def run_perturbation(
             h: round(sum(v) / len(v), 4) if v else None
             for h, v in horizon_returns.items()
         }
+        # Number of matured snapshots behind each average. A None average with a
+        # zero count means "no trade survived long enough to resolve this
+        # horizon" — not "the average return was zero".
+        sample_counts = {h: len(v) for h, v in horizon_returns.items()}
         return {
             "signal_count": fired,
             "blocked_count": blocked,
             "threshold_multiplier": round(1.0 + multiplier, 3),
             "avg_return_by_horizon": avg_returns,
+            "sample_count_by_horizon": sample_counts,
         }
+
+    # Total matured snapshots available for these horizons, regardless of which
+    # scenario they land in. Zero here means the panel cannot show returns at
+    # all — usually because trade rows were pruned before the horizon matured.
+    snapshots_available = {
+        h: sum(1 for per_h in returns_by_pt.values() if h in per_h)
+        for h in horizons
+    }
 
     return {
         "rows_analyzed": len(rows),
+        "rows_available": total_eligible,
+        "sample_limit": SAMPLE_LIMIT,
+        "sample_truncated": total_eligible > len(rows),
+        "horizons": horizons,
+        "snapshots_available_by_horizon": snapshots_available,
         "nudge_pct": nudge_pct,
         "symbol_filter": symbol,
         "baseline": _scenario(0.0),

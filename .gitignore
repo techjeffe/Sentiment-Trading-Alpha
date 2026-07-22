@@ -39,6 +39,12 @@ venvbk/
 # OS/editor noise
 .DS_Store
 Thumbs.db
+# `nul` is created by accidental Windows `> nul` redirects in a POSIX shell
+nul
+
+# Runtime logs
+*.log
+backend.log
 
 # IDE/editor directories
 .claude/

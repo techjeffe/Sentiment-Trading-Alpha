@@ -154,8 +154,8 @@ class MarketDataService:
 
         rows = (
             query.order_by(
-                ScrapedArticle.discovered_at.asc(),
-                ScrapedArticle.id.asc(),
+                ScrapedArticle.discovered_at.desc(),
+                ScrapedArticle.id.desc(),
             )
             .limit(int(request.max_posts or getattr(config, "max_posts", 50) or 50))
             .all()
@@ -170,6 +170,12 @@ class MarketDataService:
         ]
         selected_ids = [int(row.id) for row in rows]
         fast_lane_ids = [int(row.id) for row in rows if bool(row.fast_lane_triggered)]
+        # Count Truth Social posts in the mix
+        truth_social_count = sum(
+            1 for post in usable_posts 
+            if hasattr(post, 'source') and 'truth' in str(getattr(post, 'source', '')).lower()
+        )
+        
         trace: Dict[str, Any] = {
             "source": "db_queue",
             "trigger_source": trigger_source,
@@ -197,8 +203,13 @@ class MarketDataService:
                 "selected_urls": [str(row.url or "") for row in rows],
                 "fast_lane_count": len(fast_lane_ids),
             },
-            "truth_social": {"status": "skipped", "count": 0, "items": [], "error": None},
-            "rss": {"status": "replaced_by_db_queue", "feeds": [], "total_count": len(usable_posts), "error": None},
+            "truth_social": {
+                "status": "included" if truth_social_count > 0 else "none_found",
+                "count": truth_social_count,
+                "items": [self._post_trace_summary(post) for post in usable_posts if hasattr(post, 'source') and 'truth' in str(getattr(post, 'source', '')).lower()],
+                "error": None,
+            },
+            "rss": {"status": "replaced_by_db_queue", "feeds": [], "total_count": len(usable_posts) - truth_social_count, "error": None},
         }
 
         used_snapshot_fallback = False
