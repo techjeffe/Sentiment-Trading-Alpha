@@ -1,3 +1,47 @@
+# Release Notes — July 22, 2026
+
+## Fix: Trade Retention Decoupled from Analysis Retention — Forward-Return Horizons Now Reachable
+
+The `/alpha` analytics (Information Coefficient, attribution, sensitivity/perturbation) showed no data for any horizon beyond `1h`. Root cause was not in the alpha code at all: `prune_saved_analyses` hard-deleted every `Trade`, `TradeSnapshot`, and `TradeExecution` belonging to any analysis outside the newest `snapshot_retention_limit` runs (default **12**). At a 30-minute analysis cadence that is a ~6 hour window, so a `1d`/`3d`/`1w` snapshot could never resolve before its parent trade was erased.
+
+Evidence at time of diagnosis: 70,216 `decision_log_symbol` rows, but only **6 trades** and **5 snapshots — all `1h`**, with trade IDs already past 457 (≈450 trades created and destroyed).
+
+### What Changed
+- **`prune_saved_analyses` no longer touches trade history** — it prunes only `AnalysisResult` and `TradingSignal`. Analysis snapshots are large blobs worth pruning aggressively; trade rows are tiny and are the only record of realized forward returns.
+- **New `prune_stale_trades`** — time-based retention keyed on `Trade.recommended_at`, so the window is expressed in the same units as the horizons it must outlive. Deletes in chunks of 500 to stay under SQLite's variable limit, and also cleans `TradeClose` (which the previous code leaked).
+- **New `trade_retention_days` config** — default **90**, clamped to 14–3650. The 14-day floor guarantees the window always exceeds the longest tracked horizon (`1w`), so a trade can never be deleted before its final snapshot has had a chance to resolve.
+- **Trades may now outlive their parent analysis**, leaving a dangling `analysis_id`. Safe here: SQLite FKs are not enforced (no `PRAGMA foreign_keys=ON`), and the only reader walks analysis → trade, so orphans are simply not listed.
+
+### Perturbation / Sensitivity Panel
+- **Added the `1h` horizon** to `_VALID_HORIZONS`, the perturbation defaults, and the IC fetch — previously the only horizon with data was excluded from every query, so the panel filtered to zero rows and rendered `—` everywhere.
+- **`sample_count_by_horizon`** per scenario and **`snapshots_available_by_horizon`** at top level — an empty join and a genuine zero return are no longer displayed identically. The UI now shows `no data` vs `+1.23% (n=5)`.
+- **Surfaced the 500-row sampling cap** via `rows_available` / `sample_limit` / `sample_truncated` — the panel reported "160 signals fired" when it had silently sampled 500 of 70,216 eligible rows.
+- **Banner naming horizons with zero matured snapshots**, explaining that trade rows are pruned once outside the retention window.
+
+### Fix: `/alpha` White-Screen on Backend Hiccup
+`load()` called `.json()` without checking `res.ok`, so the BFF's 503 error body (`{error: ...}`) was stored as chart data and `attrData.by_event_type.length` threw `Cannot read properties of undefined`. Any backend blip took the entire page down. Now surfaces an explicit "Backend unreachable" message, with defensive optional chaining at the `attrData` render sites.
+
+### Known Limitation
+The three perturbation scenarios currently report identical signal counts. This is correct, not a bug: the sampled `blended_directional_score` values cluster on a small set of discrete values and none fall inside the ±N% band swept around the live entry threshold, so no row changes side. Making the test genuinely sensitive would require perturbing `policy_signal_threshold` or logging the pre-gate continuous score — deferred.
+
+### Files Changed
+- `backend/services/analysis/persistence_service.py` — decoupled pruning; added `prune_stale_trades`
+- `backend/services/app_config.py` — `trade_retention_days` + `DEFAULT`/`MIN`/`MAX` constants, load/update/payload plumbing
+- `backend/database/models.py` — `AppConfig.trade_retention_days` column
+- `backend/database/migrate.py` — additive `trade_retention_days` migration
+- `backend/services/analysis/perturbation.py` — `1h` horizon, `SAMPLE_LIMIT`, sample/availability counts
+- `backend/routers/alpha.py` — `1h` in `_VALID_HORIZONS` and perturbation defaults
+- `frontend/src/app/alpha/page.tsx` — response-driven horizons, no-data labelling, sampling banner, 503 crash fix
+- `.gitignore` — ignore `backend.log` and stray `nul`
+
+### Config Changes
+- `app_config.trade_retention_days` — new, default `90`, range 14–3650. No `logic_config.json` changes.
+
+### Migration
+Run `python backend/database/migrate.py` before starting the backend.
+
+---
+
 # Release Notes — July 21, 2026
 
 ## Feature: Unified Global Navigation — Persistent Shell Across All Pages
