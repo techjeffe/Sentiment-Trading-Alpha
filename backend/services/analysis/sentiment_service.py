@@ -391,6 +391,40 @@ class SentimentService:
         # without re-filtering. Re-filtering is redundant and can fail due to text
         # normalization mismatches between Stage 1 and Stage 2.
         if posts and len(posts) > 0:
+            # But still check if any post matches proxy terms - if not, warn the LLM
+            raw_terms = list(proxy_terms or []) or SYMBOL_RELEVANCE_TERMS.get(symbol.upper(), [])
+            terms = expand_proxy_terms_for_matching(raw_terms)
+            
+            if terms:
+                # Check if any provided post actually matches the proxy terms
+                has_match = False
+                for post in posts:
+                    text_blob = normalize_text_for_matching(" ".join([
+                        str(getattr(post, "title", "") or ""),
+                        str(getattr(post, "summary", "") or ""),
+                        str(getattr(post, "content", "") or ""),
+                        " ".join(getattr(post, "keywords", None) or []),
+                    ]))
+                    if any(term in text_blob for term in terms):
+                        has_match = True
+                        break
+                
+                if not has_match:
+                    # No posts match proxy terms - warn the LLM
+                    brief_titles = [
+                        str(getattr(post, "title", "") or "").strip()
+                        for post in posts[:3]
+                        if str(getattr(post, "title", "") or "").strip()
+                    ]
+                    spillover = "\n".join(f"- {title}" for title in brief_titles)
+                    return (
+                        f"No article in this batch matched {symbol} proxy terms: "
+                        f"{", ".join(raw_terms[:12]) or symbol}.\n"
+                        f"Do NOT assume DIRECT exposure for {symbol}. "
+                        f"Use BROAD or UNRELATED unless the text shows a specific causal chain.\n"
+                        f"Shared macro headlines:\n{spillover}"
+                    ).strip()
+
             relevant_context = self._build_aggregated_news_context(posts)
             if relevant_context:
                 return relevant_context

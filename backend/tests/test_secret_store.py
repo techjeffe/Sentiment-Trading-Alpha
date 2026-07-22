@@ -26,6 +26,11 @@ class DummyKeyring:
 def test_save_and_clear_telegram_secrets(monkeypatch):
     dummy = DummyKeyring()
     monkeypatch.setattr(secret_store, "_get_keyring_module", lambda: dummy)
+    
+    # Also clear environment variable fallbacks
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_AUTHORIZED_USER_ID", raising=False)
 
     saved = secret_store.save_telegram_secrets("123456:ABCDEF", "987654321", "987654321")
     assert saved["configured"] is True

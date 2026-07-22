@@ -90,18 +90,26 @@ def test_database():
 
 
 def test_api_imports():
-    """Test API router imports."""
+    """Test API router imports and prefix wiring."""
     print("=" * 60)
     print("Test 4: API Router")
     print("=" * 60)
     
+    # Build a test FastAPI app with the router included with its proper prefix
+    from fastapi import FastAPI
     from routers.edgar import router
-    routes = [r for r in router.routes]
+    
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1/edgar")
+    
+    # Get all routes from the app
+    routes = [r for r in app.routes]
     print(f"  [OK] EDGAR router: {len(routes)} endpoints")
     
+    # Check for the expected prefixed paths
     expected_paths = ["/api/v1/edgar/filings", "/api/v1/edgar/poll", "/api/v1/edgar/process", "/api/v1/edgar/config"]
     for path in expected_paths:
-        found = any(path in str(r.path) for r in routes)
+        found = any(path == r.path for r in routes)
         assert found, f"Missing endpoint: {path}"
         print(f"  [OK] Endpoint: {path}")
     
