@@ -348,6 +348,10 @@ class AppConfig(Base):
     rss_article_limits = Column(JSON, nullable=False, default={"light": 5, "normal": 10, "detailed": 20})
     data_ingestion_interval_seconds = Column(Integer, nullable=False, default=900)
     snapshot_retention_limit = Column(Integer, nullable=False, default=12)
+    # Forward-return history is pruned on its own clock, independent of
+    # snapshot_retention_limit. Trades must outlive the longest tracked horizon
+    # (1w) by a wide margin or the alpha/IC analytics have nothing to measure.
+    trade_retention_days = Column(Integer, nullable=False, default=90)
     extraction_model = Column(String(128), nullable=False, default="")
     reasoning_model = Column(String(128), nullable=False, default="")
     # Parallel Ollama slots for Stage 2 specialist calls. 1 = serialized (safe

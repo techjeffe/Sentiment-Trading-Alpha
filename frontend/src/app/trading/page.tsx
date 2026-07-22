@@ -837,42 +837,59 @@ export default function TradingPage() {
             {/* Header */}
             <AppHeader
                 titleSlot={
-                    <div className="flex items-center gap-3 flex-wrap">
-                        <div>
+                    <div className="flex items-center gap-4 flex-wrap flex-1">
+                        {/* Title */}
+                        <div className="flex-shrink-0">
                             <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 to-blue-400">
                                 Trading
                             </h1>
-                            <p className="text-slate-500 text-xs mt-0.5">
-                                Keep Strategy Paper visible at all times, then layer Alpaca Paper and Alpaca Live on top as confidence grows
-                            </p>
                         </div>
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/20 bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-300">
-                            Strategy Paper
-                        </span>
-                        {configuredBrokerModes.map((mode) => (
-                            <span
-                                key={mode}
-                                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${modeBadgeClass(mode)}`}
-                            >
-                                Alpaca {modeLabel(mode)}
-                            </span>
-                        ))}
-                        {alpacaLiveEnabled && (
-                            <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-600/60 bg-rose-600/15 px-3 py-1 text-xs font-bold text-rose-300 tracking-wide">
-                                <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse shrink-0" />
-                                Live Execution Armed
-                            </span>
-                        )}
+
+                        {/* Unified Track Selector - Segmented Control */}
+                        <div className="flex items-center bg-slate-800/60 rounded-lg p-1 border border-slate-700/50">
+                            {availableTracks.map((track) => {
+                                const isActive = preferredTrack === track;
+                                return (
+                                    <button
+                                        key={track}
+                                        type="button"
+                                        onClick={() => setPreferredTrack(track)}
+                                        className={`
+                                            px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200
+                                            ${isActive
+                                                ? track === 'strategy_paper'
+                                                    ? 'bg-sky-500/20 text-sky-200 shadow-sm shadow-sky-500/20'
+                                                    : track === 'alpaca_paper'
+                                                        ? 'bg-cyan-500/20 text-cyan-200 shadow-sm shadow-cyan-500/20'
+                                                        : 'bg-rose-500/20 text-rose-200 shadow-sm shadow-rose-500/20'
+                                                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                                            }
+                                        `}
+                                    >
+                                        {trackLabel(track)}
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </div>
                 }
             >
                 <div className="flex items-center gap-2 shrink-0">
+                    {/* Status Indicators */}
+                    {alpacaLiveEnabled && (
+                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-500/8 border border-rose-500/15">
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse shrink-0" />
+                            <span className="text-[11px] font-medium text-rose-300/90">Live Armed</span>
+                        </div>
+                    )}
                     {data?.market && <MarketBadge market={data.market} />}
+
+                    {/* Actions */}
                     <button
                         type="button"
                         onClick={load}
                         disabled={loading}
-                        className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white border border-slate-700/60 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-50"
+                        className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white border border-slate-700/60 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50 h-8"
                     >
                         <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
                         Refresh
@@ -881,7 +898,7 @@ export default function TradingPage() {
                         type="button"
                         onClick={handleReset}
                         disabled={resetting || loading}
-                        className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 border border-red-500/20 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-50"
+                        className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 border border-red-500/20 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50 h-8"
                     >
                         <Trash2 size={12} />
                         Reset
@@ -904,32 +921,9 @@ export default function TradingPage() {
 
                 {data && (
                     <>
-                        <div className="rounded-xl border border-white/8 p-4 space-y-3" style={{ background: "rgba(30,41,59,0.7)" }}>
-                            <div className="flex items-center justify-between gap-3 flex-wrap">
-                                <div>
-                                    <p className="text-sm font-semibold text-white">Preferred Track</p>
-                                    <p className="text-[11px] text-slate-500 mt-0.5">This only changes what the page emphasizes first. All tracks stay visible and keep their own history.</p>
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    {availableTracks.map((track) => (
-                                        <button
-                                            key={track}
-                                            type="button"
-                                            onClick={() => setPreferredTrack(track)}
-                                            className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${preferredTrack === track
-                                                ? track === "strategy_paper"
-                                                    ? "border-sky-400/50 bg-sky-500/15 text-sky-200"
-                                                    : track === "alpaca_paper"
-                                                        ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200"
-                                                        : "border-rose-400/50 bg-rose-500/15 text-rose-200"
-                                                : "border-slate-700 text-slate-400 hover:text-white"
-                                                }`}
-                                        >
-                                            {trackLabel(track)}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
+                        {/* Subtitle hint below header */}
+                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                            <span>Strategy Paper is your baseline. Layer Alpaca Paper and Alpaca Live as confidence grows.</span>
                         </div>
 
                         {/* ── Live summary (front and center when live is preferred) ── */}

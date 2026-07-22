@@ -38,7 +38,7 @@ export function NewsFilter({ symbol, startDate, endDate, source, onFilterChange 
           <select
             value={symbol}
             onChange={(e) => handleChange("symbol", e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900"
           >
             <option value="">All Symbols</option>
             {symbols.filter(s => s).map((s) => (
@@ -54,7 +54,7 @@ export function NewsFilter({ symbol, startDate, endDate, source, onFilterChange 
             type="date"
             value={startDate}
             onChange={(e) => handleChange("startDate", e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900"
           />
         </div>
 
@@ -64,7 +64,7 @@ export function NewsFilter({ symbol, startDate, endDate, source, onFilterChange 
             type="date"
             value={endDate}
             onChange={(e) => handleChange("endDate", e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900"
           />
         </div>
 
@@ -74,7 +74,7 @@ export function NewsFilter({ symbol, startDate, endDate, source, onFilterChange 
           <select
             value={source}
             onChange={(e) => handleChange("source", e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900"
           >
             {sources.map((s) => (
               <option key={s.value} value={s.value}>{s.label}</option>

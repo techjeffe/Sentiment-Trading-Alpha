@@ -93,11 +93,17 @@ async def get_unified_news(
                 }
             })
     
-    # Query 2: RSS Feed Articles
-    if not source or source == "rss":
+    # Query 2: RSS Feed Articles (including Truth Social)
+    if not source or source in ["rss", "truth_social"]:
         articles_query = db.query(ScrapedArticle)
         # Note: Removed filter(ScrapedArticle.processed == True) to show ALL articles
         # This allows users to see unprocessed items and process them
+        
+        # If filtering by truth_social, only show Truth Social RSS articles
+        if source == "truth_social":
+            articles_query = articles_query.filter(
+                ScrapedArticle.source.ilike("%truth%")
+            )
         
         # Apply date filters
         if date_filter.get("start"):
@@ -108,10 +114,13 @@ async def get_unified_news(
         
         # Convert to unified format
         for a in articles_query.all():
+            # Determine if this is Truth Social based on source
+            is_truth_social = "truth" in (a.source or "").lower()
+            
             all_items.append({
                 "id": f"rss_{a.id}",
-                "source": "rss",
-                "source_label": a.source or "RSS",
+                "source": "truth_social" if is_truth_social else "rss",
+                "source_label": "Truth Social" if is_truth_social else (a.source or "RSS"),
                 "symbol": None,  # Articles don't have direct symbol mapping
                 "title": a.title or "No title",
                 "summary": a.summary or "No summary",
@@ -124,11 +133,13 @@ async def get_unified_news(
                 }
             })
     
-    # Query 3: Truth Social Posts (if table exists)
+    # Query 3: Truth Social Posts (from posts table if exists)
+    # Note: Most Truth Social content is stored in ScrapedArticle table via RSS
+    # This query is for any that might be stored in the Post table
     if not source or source == "truth_social":
         try:
             posts_query = db.query(Post).filter(
-                Post.source == "truth_social"
+                or_(Post.source == "truth_social", Post.source.ilike("%truth%"))
             )
             
             # Apply date filters

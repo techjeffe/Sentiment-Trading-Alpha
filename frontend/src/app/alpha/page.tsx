@@ -39,9 +39,13 @@ type PerturbScenario = {
   signal_count: number; blocked_count: number;
   threshold_multiplier: number;
   avg_return_by_horizon: Record<string, number | null>;
+  sample_count_by_horizon: Record<string, number>;
 };
 type PerturbResponse = {
   rows_analyzed: number; nudge_pct: number;
+  rows_available: number; sample_limit: number; sample_truncated: boolean;
+  horizons: string[];
+  snapshots_available_by_horizon: Record<string, number>;
   baseline: PerturbScenario; nudge_up: PerturbScenario; nudge_down: PerturbScenario;
   error?: string;
 };
@@ -98,9 +102,18 @@ export default function AlphaPage() {
       const sym = symbolFilter.trim().toUpperCase() || undefined;
       const symQ = sym ? `&symbol=${sym}` : "";
       const [icRes, attrRes] = await Promise.all([
-        fetch(`/api/alpha/ic?horizons=4h,1d,3d,1w&window=${window_}${symQ}`),
+        fetch(`/api/alpha/ic?horizons=1h,4h,1d,3d,1w&window=${window_}${symQ}`),
         fetch(`/api/alpha/attribution?limit=200${symQ}`),
       ]);
+      if (!icRes.ok || !attrRes.ok) {
+        // The BFF answers 503 with an {error} body when the backend is
+        // unreachable. Storing that shape as data makes every downstream
+        // field access crash, so surface it as an error instead.
+        setIcData(null);
+        setAttrData(null);
+        setError("Backend unreachable — is the API running on port 8000?");
+        return;
+      }
       const [ic, attr] = await Promise.all([icRes.json(), attrRes.json()]);
       setIcData(ic);
       setAttrData(attr);
@@ -118,7 +131,7 @@ export default function AlphaPage() {
       const res = await fetch("/api/alpha/perturbation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nudge_pct: nudgePct / 100, symbol: sym, horizons: ["4h", "1d", "3d", "1w"] }),
+        body: JSON.stringify({ nudge_pct: nudgePct / 100, symbol: sym, horizons: ["1h", "4h", "1d", "3d", "1w"] }),
       });
       setPerturbData(await res.json());
     } catch (e) {
@@ -290,7 +303,7 @@ export default function AlphaPage() {
         )}
 
         {/* ── Event type attribution ── */}
-        {attrData && attrData.by_event_type.length > 0 && (
+        {attrData && (attrData.by_event_type?.length ?? 0) > 0 && (
           <Section title="Signal Attribution by Event Type" icon={<TrendingUp size={14} className="text-amber-400" />}>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={attrData.by_event_type} margin={{ top: 4, right: 12, bottom: 4, left: 0 }}>
@@ -308,7 +321,7 @@ export default function AlphaPage() {
               </BarChart>
             </ResponsiveContainer>
             <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {attrData.by_event_type.slice(0, 6).map(row => (
+              {(attrData.by_event_type ?? []).slice(0, 6).map(row => (
                 <div key={row.event_type} className="bg-slate-800 rounded-lg p-3">
                   <div className="flex items-center gap-1.5 mb-1">
                     <span className="w-2 h-2 rounded-full" style={{ background: EVENT_COLORS[row.event_type] ?? "#64748b" }} />
@@ -323,11 +336,11 @@ export default function AlphaPage() {
                 </div>
               ))}
             </div>
-            {attrData.top_terms.length > 0 && (
+            {(attrData.top_terms?.length ?? 0) > 0 && (
               <div className="mt-4">
                 <p className="text-xs text-slate-500 mb-2">Top matched keywords:</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {attrData.top_terms.slice(0, 16).map(({ term, count }) => (
+                  {(attrData.top_terms ?? []).slice(0, 16).map(({ term, count }) => (
                     <span key={term} className="text-xs bg-slate-800 text-slate-300 border border-slate-700 px-2 py-0.5 rounded-full">
                       {term} <span className="text-slate-500">×{count}</span>
                     </span>
@@ -361,6 +374,27 @@ export default function AlphaPage() {
             </button>
           </div>
           {perturbData && !perturbData.error && (
+            <div className="mb-3 space-y-1">
+              <p className="text-xs text-slate-400">
+                Replayed <span className="text-slate-200 font-medium">{perturbData.rows_analyzed}</span> signals
+                {perturbData.sample_truncated && (
+                  <> — most recent {perturbData.sample_limit} of <span className="text-slate-200 font-medium">{perturbData.rows_available}</span> eligible</>
+                )}
+              </p>
+              {(() => {
+                const avail = perturbData.snapshots_available_by_horizon ?? {};
+                const missing = (perturbData.horizons ?? []).filter(h => (avail[h] ?? 0) === 0);
+                if (missing.length === 0) return null;
+                return (
+                  <p className="text-xs text-amber-400/90">
+                    No matured trade snapshots for {missing.join(", ")}. Trade rows are pruned once their
+                    analysis falls outside the snapshot retention window, so longer horizons may never resolve.
+                  </p>
+                );
+              })()}
+            </div>
+          )}
+          {perturbData && !perturbData.error && (
             <div className="grid grid-cols-3 gap-3">
               {(["nudge_down", "baseline", "nudge_up"] as const).map(key => {
                 const s = perturbData[key];
@@ -372,13 +406,21 @@ export default function AlphaPage() {
                     <div className="text-xs text-slate-400 mb-1">Signals fired: <span className="text-slate-100 font-medium">{s.signal_count}</span></div>
                     <div className="text-xs text-slate-400 mb-3">Blocked: <span className="text-slate-100 font-medium">{s.blocked_count}</span></div>
                     <div className="space-y-1">
-                      {(["4h", "1d", "3d", "1w"] as const).map(h => {
+                      {(perturbData.horizons ?? ["1h", "4h", "1d", "3d", "1w"]).map(h => {
                         const r = s.avg_return_by_horizon[h];
+                        const n = s.sample_count_by_horizon?.[h] ?? 0;
+                        // No matured snapshot at all for this horizon is a data
+                        // gap, not a zero return — label it so the two are not
+                        // rendered identically.
+                        const noData = r == null;
                         return (
                           <div key={h} className="flex justify-between text-xs">
                             <span className="text-slate-500">{h}</span>
-                            <span className={r == null ? "text-slate-600" : r >= 0 ? "text-emerald-400" : "text-red-400"}>
-                              {r == null ? "—" : `${r >= 0 ? "+" : ""}${fmt(r, 2)}%`}
+                            <span
+                              className={noData ? "text-slate-600 italic" : r >= 0 ? "text-emerald-400" : "text-red-400"}
+                              title={noData ? "No trade survived long enough for this horizon to resolve" : `${n} matured snapshot${n === 1 ? "" : "s"}`}
+                            >
+                              {noData ? "no data" : `${r >= 0 ? "+" : ""}${fmt(r, 2)}% (n=${n})`}
                             </span>
                           </div>
                         );

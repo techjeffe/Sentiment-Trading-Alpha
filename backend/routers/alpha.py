@@ -22,7 +22,7 @@ from database.engine import get_db, get_decision_log_db
 
 router = APIRouter(prefix="/alpha", tags=["alpha"])
 
-_VALID_HORIZONS = {"4h", "1d", "3d", "1w"}
+_VALID_HORIZONS = {"1h", "4h", "1d", "3d", "1w"}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -295,7 +295,7 @@ def get_attribution(
 class PerturbationRequest(BaseModel):
     nudge_pct: float = Field(0.10, ge=0.01, le=0.50, description="Fractional nudge applied to entry_threshold (e.g. 0.10 = ±10%)")
     symbol: Optional[str] = Field(None, description="Filter to one underlying symbol")
-    horizons: List[str] = Field(default=["4h", "1d", "3d", "1w"])
+    horizons: List[str] = Field(default=["1h", "4h", "1d", "3d", "1w"])
 
 
 @router.post("/perturbation")
