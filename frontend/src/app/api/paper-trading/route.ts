@@ -14,10 +14,20 @@ export async function GET() {
     }
 }
 
+function backendHeaders(init?: HeadersInit): Headers {
+    const headers = new Headers(init);
+    const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN;
+    if (ADMIN_API_TOKEN) {
+        headers.set("X-Admin-Token", ADMIN_API_TOKEN);
+    }
+    return headers;
+}
+
 export async function DELETE() {
     try {
         const r = await fetch(`${getBackendApiUrl()}/api/v1/paper-trading/reset`, {
             method: "DELETE",
+            headers: backendHeaders(),
             cache: "no-store",
         });
         if (!r.ok) {
