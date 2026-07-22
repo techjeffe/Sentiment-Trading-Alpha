@@ -18,6 +18,10 @@ SYMBOL = "NVDA"
 FORM_TYPES = ["10-K", "10-Q", "8-K"]  # Include 8-K for testing
 
 
+import pytest
+
+
+@ pytest.mark.skip(reason="Hits live SEC EDGAR API - enable manually when needed")
 async def test_llm_read_filing():
     """Test LLM reading and summarization of a single filing."""
     print("=" * 60)
@@ -167,6 +171,7 @@ Provide a concise 2-3 paragraph summary focusing on market-relevant information.
         traceback.print_exc()
 
 
+@ pytest.mark.skip(reason="Hits live SEC EDGAR API - enable manually when needed")
 async def test_multiple_filings():
     """Test LLM reading of multiple 10-K and 10-Q filings."""
     print("\n" + "=" * 60)
