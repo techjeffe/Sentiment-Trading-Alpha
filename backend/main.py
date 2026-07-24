@@ -357,6 +357,7 @@ async def _auto_analysis_scheduler_loop():
                         continuous_entry_enabled=_ce,
                         regime_adaptation_enabled=_ra,
                         hold_decay_enabled=_hd,
+                        request_id=request_id,
                     )
                     
                     result = await pipeline.run(

@@ -57,6 +57,7 @@ class PipelineService:
         continuous_entry_enabled: Optional[bool] = None,
         regime_adaptation_enabled: Optional[bool] = None,
         hold_decay_enabled: Optional[bool] = None,
+        request_id: Optional[str] = None,
     ) -> None:
         self._db = db
         self._price_cache = price_cache
@@ -77,7 +78,7 @@ class PipelineService:
         self._backtest = BacktestService(logic_config=logic_config)
 
         # Pipeline state
-        self.request_id: str = ""
+        self.request_id: str = request_id or ""
         self.symbols: List[str] = []
         self.model_name: str = ""
         self.timestamp: str = ""
@@ -147,7 +148,8 @@ class PipelineService:
         """Run the full analysis pipeline as an async stream, yielding SSE events."""
         started_at = time.time()
         # ── Request setup ───────────────────────────────────────────────
-        self.request_id = str(uuid.uuid4())
+        if not self.request_id:
+            self.request_id = str(uuid.uuid4())
         self.symbols = list({s.upper() for s in (request.symbols or [])})
         if not self.symbols:
             self.symbols = self._get_default_symbols()
