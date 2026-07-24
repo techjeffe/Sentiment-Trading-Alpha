@@ -23,9 +23,10 @@ from slowapi.util import get_remote_address
 from database.engine import SessionLocal
 from database.models import AnalysisResult
 from database.models import init_db
-from routers import router as analysis_router
-from routers import edgar as edgar_router
-from routers import news as news_router
+from routers.analysis import router as analysis_router
+from routers.edgar import router as edgar_router
+from routers.news import router as news_router
+from routers.news_sources import router as news_sources_router
 from services.app_config import config_to_dict_with_stats, get_or_create_app_config, try_acquire_analysis_lock, release_analysis_lock
 from services.pnl_tracker import PnLTracker, SCHEDULER_INTERVAL_SECONDS
 from services.data_ingestion.worker import run_ingestion_cycle
@@ -853,8 +854,9 @@ async def get_metrics():
 
 
 app.include_router(analysis_router, prefix="/api/v1", tags=["API"])
-app.include_router(edgar_router.router, prefix="/api/v1/edgar", tags=["edgar"])
-app.include_router(news_router.router, prefix="/api/v1/news", tags=["news"])
+app.include_router(edgar_router, prefix="/api/v1/edgar", tags=["edgar"])
+app.include_router(news_router, prefix="/api/v1/news", tags=["news"])
+app.include_router(news_sources_router, prefix="/api/v1", tags=["news-sources"])
 
 
 if __name__ == "__main__":

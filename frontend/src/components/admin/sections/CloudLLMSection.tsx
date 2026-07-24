@@ -35,6 +35,7 @@ const CLOUD_PROVIDERS: ProviderDef[] = [
 const LOCAL_PROVIDERS: ProviderDef[] = [
     { value: "ollama", label: "Ollama", tagline: "Local LLM server" },
     { value: "vllm", label: "vLLM", tagline: "OpenAI-compatible local" },
+    { value: "omlx", label: "OMLX", tagline: "OpenAI-compatible local (MLX)" },
     { value: "llama.cpp", label: "llama.cpp", tagline: "C++ inference server" },
     { value: "custom", label: "Custom", tagline: "Bring your own endpoint" },
 ];
@@ -72,6 +73,7 @@ const PROVIDER_DEFAULT_MODELS: Record<string, string[]> = {
 const LOCAL_URLS: ProviderUrls = {
     ollama: "http://localhost:11434/api/generate",
     vllm: "http://localhost:8000",
+    omlx: "http://localhost:11434/v1",
     "llama.cpp": "http://localhost:8080",
 };
 

@@ -50,13 +50,16 @@ export function ModelsSection({ config, setConfig, hasAdvancedCustomizations, de
     const isVllm = config.inference_backend === "vllm";
     const isOllama = config.inference_backend === "ollama";
     const isOpenai = config.inference_backend === "openai";
+    const isOmlx = config.inference_backend === "omlx";
 
-    // For Ollama/vLLM: show flag if no models found, for Cloud: show note to configure in LLM section
+    // For Ollama/vLLM/omlx: show flag if no models found, for Cloud: show note to configure in LLM section
     const noModelsMessage = isOpenai
         ? "Configure a Cloud LLM API key in the LLM Configuration section above to see cloud models."
         : isVllm
             ? "No vLLM models detected — make sure vLLM is running and VLLM_URL is set correctly."
-            : "No Ollama models detected — make sure Ollama is running.";
+            : isOmlx
+                ? "No OMLX models detected — make sure omlx is running on the configured URL."
+                : "No Ollama models detected — make sure Ollama is running.";
 
     return (
         <section id="models" className="scroll-mt-24 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-5">

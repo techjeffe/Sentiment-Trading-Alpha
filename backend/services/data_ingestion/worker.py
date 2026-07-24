@@ -1,5 +1,11 @@
 """
 Background ingestion worker for the article producer/consumer pipeline.
+
+Enhanced with:
+- Google News redirect resolution
+- 1-hour freshness filtering
+- Improved deduplication
+- Support for new source configuration
 """
 
 from __future__ import annotations
@@ -7,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -22,6 +28,9 @@ from database.models import ScrapedArticle
 from services.app_config import build_enabled_rss_feed_labels, build_enabled_rss_feed_map, get_or_create_app_config
 from services.data_ingestion.parser import NewsArticle, RSSFeedParser
 from services.sentiment.prompts import expand_proxy_terms_for_matching, normalize_text_for_matching
+from services.data_ingestion.google_news_resolver import resolve_google_news_url, resolve_google_news_urls
+from services.data_ingestion.freshness_filter import FreshnessFilter, filter_fresh_articles
+from config.news_sources import get_enabled_sources, build_rss_feed_map as build_news_source_map
 
 logger = logging.getLogger(__name__)
 
@@ -338,12 +347,21 @@ async def run_ingestion_cycle(db: Optional[Session] = None) -> Dict[str, Any]:
             if str(v).strip()
         }
 
-        # Auto-inject Yahoo Finance news for every tracked symbol so custom
-        # equities (NVDA, GPRO, etc.) have a dedicated per-ticker news stream without
-        # requiring manual feed configuration.
-        yahoo_symbols = [sym for sym in tracked_symbols if sym]
-        merged_feeds = build_enabled_rss_feed_map(config)
-        merged_labels = build_enabled_rss_feed_labels(config)
+        # ── Enhanced Source Configuration ──
+        # Use new source config + legacy config
+        enabled_sources = get_enabled_sources()
+        news_source_feeds = build_news_source_map(enabled_sources)
+        
+        # Fall back to legacy config if no new sources configured
+        if not news_source_feeds:
+            yahoo_symbols = [sym for sym in tracked_symbols if sym]
+            merged_feeds = build_enabled_rss_feed_map(config)
+            merged_labels = build_enabled_rss_feed_labels(config)
+        else:
+            yahoo_symbols = [sym for sym in tracked_symbols if sym]
+            merged_feeds = news_source_feeds
+            merged_labels = {source.name: source.name for source in enabled_sources}
+        
         parser = RSSFeedParser(
             feeds=merged_feeds,
             feed_labels=merged_labels,
@@ -359,12 +377,45 @@ async def run_ingestion_cycle(db: Optional[Session] = None) -> Dict[str, Any]:
         
         print(f"Ingestion: {len(articles)} raw articles "
               f"({len(articles) - len(yahoo_articles) if yahoo_symbols else len(articles)} RSS + {len(yahoo_articles) if yahoo_symbols else 0} Yahoo Finance)")
+        
+        # ── Step 1: Freshness Filter (1-hour) ──
+        freshness_filter = FreshnessFilter(max_age_hours=1.0)
+        articles_before_freshness = len(articles)
+        articles = freshness_filter.filter_articles(articles)
+        print(f"Freshness filter: {len(articles)}/{articles_before_freshness} articles passed (within 1 hour)")
 
+        # ── Step 2: Resolve Google News Redirects ──
+        google_news_articles = [
+            article for article in articles
+            if article.link and "news.google.com/rss" in article.link
+        ]
+        
+        if google_news_articles:
+            print(f"Resolving {len(google_news_articles)} Google News redirects...")
+            urls_to_resolve = [article.link for article in google_news_articles]
+            resolved_urls = await resolve_google_news_urls(urls_to_resolve)
+            
+            # Update articles with resolved URLs
+            for article in google_news_articles:
+                if article.link in resolved_urls:
+                    new_url = resolved_urls[article.link]
+                    if new_url != article.link:
+                        print(f"  Resolved: {article.link[:80]}... -> {new_url[:80]}...")
+                        article.link = new_url
+                        # Update source to reflect actual publisher
+                        if "bloomberg.com" in new_url:
+                            article.source = "Bloomberg"
+                        elif "reuters.com" in new_url:
+                            article.source = "Reuters"
+                        elif "marketwatch.com" in new_url:
+                            article.source = "MarketWatch"
+        
+        # ── Step 3: Stage 0 Filter (Relevance) ──
         # Articles from Yahoo Finance are relevant by definition —
         # bypass Stage 0 for them so "Alphabet Reports Earnings" doesn't get dropped
         # because it doesn't contain the ticker "goog".
         yahoo_source_labels: set = {"Yahoo Finance"}
-
+        
         kept_articles = [
             article for article in articles
             if article.link and (
@@ -378,13 +429,30 @@ async def run_ingestion_cycle(db: Optional[Session] = None) -> Dict[str, Any]:
             key=lambda item: _coerce_utc(getattr(item, "published_date", None)) or _utc_now(),
             reverse=True,
         )
-
+        
+        # ── Step 4: Deduplication Check ──
+        # Check against recent articles in DB to avoid reprocessing
+        recent_cutoff = _utc_now() - timedelta(hours=2)  # Check last 2 hours
+        recent_urls = set()
+        if session:
+            recent_articles = session.query(ScrapedArticle).filter(
+                ScrapedArticle.discovered_at >= recent_cutoff
+            ).all()
+            recent_urls = {article.url for article in recent_articles}
+        
+        new_articles = [
+            article for article in kept_articles
+            if article.link not in recent_urls
+        ]
+        
+        print(f"Deduplication: {len(new_articles)}/{len(kept_articles)} articles are new")
+        
         stored_count = 0
         duplicate_count = 0
         fast_lane_article_ids: List[int] = []
         fast_lane_symbols: List[str] = []
-
-        for article in kept_articles:
+        
+        for article in new_articles:
             fallback_text = " ".join(
                 part for part in [article.summary or "", article.content or "", article.title or ""] if part
             )
@@ -392,7 +460,7 @@ async def run_ingestion_cycle(db: Optional[Session] = None) -> Dict[str, Any]:
                 full_content = await fetch_article_text(article.link, fallback_text=fallback_text)
             except Exception as exc:
                 full_content = _clean_extracted_text(f"{fallback_text} Extraction error: {exc}", fallback_text)
-
+            
             summary_blob = " ".join([article.title or "", article.summary or "", full_content or ""])
             fast_lane_hit = check_fast_lane(summary_blob)
             row, is_new = _upsert_scraped_article(session, article, full_content, fast_lane_hit)
@@ -401,7 +469,7 @@ async def run_ingestion_cycle(db: Optional[Session] = None) -> Dict[str, Any]:
                 stored_count += 1
             else:
                 duplicate_count += 1
-
+            
             if fast_lane_hit:
                 fast_lane_article_ids.append(int(row.id))
                 fast_lane_symbols.extend(_resolve_fast_lane_symbols(summary_blob, tracked_symbols))

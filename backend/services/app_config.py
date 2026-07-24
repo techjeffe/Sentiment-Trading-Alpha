@@ -55,7 +55,7 @@ VALID_REMOTE_SNAPSHOT_MODES = {"telegram"}
 DEFAULT_ALPACA_EXECUTION_MODE = "paper"
 VALID_ALPACA_EXECUTION_MODES = {"off", "paper", "live"}
 DEFAULT_INFERENCE_BACKEND = "ollama"
-VALID_INFERENCE_BACKENDS = {"ollama", "vllm", "openai"}
+VALID_INFERENCE_BACKENDS = {"ollama", "vllm", "openai", "omlx"}
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 MAX_CUSTOM_SYMBOLS = 50
@@ -591,7 +591,7 @@ def _apply_env_overrides(config: AppConfig, db: Session) -> bool:
     changed = False
     
     
-    # INFERENCE_BACKEND: "ollama" | "vllm" | "openai"
+    # INFERENCE_BACKEND: "ollama" | "vllm" | "openai" | "omlx"
     env_backend = os.getenv("INFERENCE_BACKEND", "").strip().lower()
     if env_backend and env_backend in VALID_INFERENCE_BACKENDS:
         if getattr(config, "inference_backend", "") != env_backend:

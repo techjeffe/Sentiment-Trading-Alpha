@@ -2,6 +2,7 @@
 
 import { normalizeFeedUrl, normalizeArticleLimit } from "@/lib/constants/feed-utils";
 import { AppConfig } from "@/lib/utils/config-normalizer";
+import { NewsSourceManager } from "./NewsSourceManager";
 
 type RssSectionProps = {
     config: AppConfig;
@@ -123,6 +124,11 @@ export function RssSection({
                 <p className="text-xs text-slate-500">
                     Add up to {config.max_custom_rss_feeds} extra feeds for targeted sources like tech news, and give them friendly names that appear across the app.
                 </p>
+            </div>
+
+            {/* Enhanced News Source Management */}
+            <div className="pt-6 border-t border-slate-800">
+                <NewsSourceManager />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

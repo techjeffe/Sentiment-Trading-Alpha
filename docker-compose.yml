@@ -25,6 +25,8 @@ services:
       DECISION_LOG_DATABASE_URL: sqlite:////data/decision_log.db
     volumes:
       - trading-data:/data   # Persist SQLite databases
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Allow container to reach host services (omlx, etc.)
     restart: unless-stopped
     # All variables from .env are injected automatically by Docker Compose
     # DATABASE_URL is overridden above for Docker compatibility

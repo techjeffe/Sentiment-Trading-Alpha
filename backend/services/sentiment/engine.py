@@ -241,17 +241,25 @@ class SentimentEngine:
         # FIX: Set inference_backend BEFORE using it in model_name logic
         self.inference_backend = self.INFERENCE_BACKEND
         
-        if self.INFERENCE_BACKEND == "openai":
+        if self.INFERENCE_BACKEND in ("openai", "omlx"):
             try:
                 from services.secret_store import get_cloud_api_key
                 self.OPENAI_API_KEY = get_cloud_api_key(cloud_provider) or os.getenv("OPENAI_API_KEY", "").strip()
+                # omlx typically doesn't require a real API key
+                if self.INFERENCE_BACKEND == "omlx" and not self.OPENAI_API_KEY:
+                    self.OPENAI_API_KEY = "dummy"
             except Exception:
                 self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+                if self.INFERENCE_BACKEND == "omlx" and not self.OPENAI_API_KEY:
+                    self.OPENAI_API_KEY = "dummy"
 
         # Model name: prefer explicit parameter, then backend-specific env var, then generic env var
         if self.inference_backend == "openai":
             # For OpenAI/cloud: use OPENAI_MODEL env var or config
             self.model_name = (model_name or os.getenv("OPENAI_MODEL", "").strip()) or ""
+        elif self.inference_backend == "omlx":
+            # For OMLX: use OMLX_MODEL env var or config
+            self.model_name = (model_name or os.getenv("OMLX_MODEL", "").strip()) or ""
         elif self.inference_backend == "vllm":
             # For vLLM: use VLLM_MODEL env var or config
             self.model_name = (model_name or os.getenv("VLLM_MODEL", "").strip()) or ""
@@ -267,7 +275,7 @@ class SentimentEngine:
     def set_backend(cls, backend: str) -> None:
         """Switch the active inference backend for all future engine instances."""
         normalized = str(backend or "ollama").strip().lower()
-        cls.INFERENCE_BACKEND = normalized if normalized in {"ollama", "vllm", "openai"} else "ollama"
+        cls.INFERENCE_BACKEND = normalized if normalized in {"ollama", "vllm", "openai", "omlx"} else "ollama"
     
     def clear_cache(self):
         """Clear all cached analysis and LLM-generated keyword results."""
@@ -1001,9 +1009,9 @@ class SentimentEngine:
         max_tokens: Optional[int] = None,
         response_schema: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        # Cloud backends (OpenAI / vLLM) handle concurrency natively — no semaphore.
+        # Cloud backends (OpenAI / vLLM / omlx) handle concurrency natively — no semaphore.
         # The semaphore is only needed for local Ollama (single GPU, one request at a time).
-        if self.inference_backend in ("openai", "vllm"):
+        if self.inference_backend in ("openai", "vllm", "omlx"):
             return await asyncio.to_thread(
                 self._call_ollama_sync,
                 prompt,
@@ -1326,7 +1334,7 @@ class SentimentEngine:
         print(f"SentimentEngine._call_ollama_sync -> backend={self.inference_backend!r}, model_override={model_override!r}")
         if self.inference_backend == "vllm":
             return self._call_vllm_sync(prompt, model_override, force_json, max_tokens, response_schema)
-        if self.inference_backend == "openai":
+        if self.inference_backend in ("openai", "omlx"):
             return self._call_openai_sync(prompt, model_override, force_json, max_tokens, response_schema)
         model = (model_override or self.model_name or "").strip()
         effective_max_tokens = max_tokens if max_tokens is not None else self.MAX_TOKENS

@@ -46,6 +46,12 @@ from services.telegram_bot import verify_remote_control
 router = APIRouter()
 
 
+def _is_local_url(url: str) -> bool:
+    """Check if a URL points to a local server (localhost, 127.0.0.1, etc.)."""
+    import re
+    return bool(re.search(r"(localhost|127\\.0\\.0\\.1|::1)", url, re.IGNORECASE))
+
+
 def _fetch_models_from_backends(config, override_base_url: Optional[str] = None, override_provider: Optional[str] = None) -> Dict[str, Any]:
     """Return {'local_models': [...], 'cloud_models': [...]} from all configured backends.
 
@@ -58,51 +64,80 @@ def _fetch_models_from_backends(config, override_base_url: Optional[str] = None,
     """
     result: Dict[str, List[str]] = {"local_models": [], "cloud_models": []}
 
-    # 1. Local models from Ollama (use DB-stored URL if set, fall back to env var)
-    try:
-        ollama_db_url = str(getattr(config, "ollama_url", "") or "").strip()
-        ollama_url_param = ollama_db_url if ollama_db_url else None
-        ollama = get_ollama_status(timeout=3, ollama_url=ollama_url_param)
-        result["local_models"] = ollama.get("available_models") or []
-    except Exception:
-        result["local_models"] = []
+    # Determine the inference backend
+    backend = str(getattr(config, "inference_backend", "ollama") or "ollama").strip().lower()
 
-    # 2. Cloud models from OpenAI-compatible endpoint (only if API key is configured)
-    def _resolve_base_url() -> str:
-        if override_base_url:
-            return override_base_url
-        return str(getattr(config, "openai_base_url", "https://api.openai.com/v1") or "https://api.openai.com/v1")
-
-    api_key = get_openai_api_key()
-    # Also try override_provider or the DB-stored cloud_provider
-    if override_provider and override_provider != "openai":
-        from services.secret_store import get_cloud_api_key
-        api_key = get_cloud_api_key(override_provider)
-    elif not api_key:
-        cloud_provider = str(getattr(config, "cloud_provider", "") or "").strip().lower()
-        if cloud_provider and cloud_provider != "openai":
-            from services.secret_store import get_cloud_api_key
-            api_key = get_cloud_api_key(cloud_provider)
-    if api_key:
+    # 1. Local models - depends on the backend type
+    if backend == "ollama":
+        # Ollama backend: use Ollama API
         try:
-            from services.openai_client import get_openai_status
-            base_url = _resolve_base_url()
-            status = get_openai_status(api_key=api_key, base_url=base_url, timeout=5)
-            result["cloud_models"] = status.get("available_models") or []
+            ollama_db_url = str(getattr(config, "ollama_url", "") or "").strip()
+            ollama_url_param = ollama_db_url if ollama_db_url else None
+            ollama = get_ollama_status(timeout=3, ollama_url=ollama_url_param)
+            result["local_models"] = ollama.get("available_models") or []
         except Exception:
-            result["cloud_models"] = []
-    else:
-        # Also try env var fallback
-        import os
-        env_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if env_key:
+            result["local_models"] = []
+    elif backend == "omlx":
+        # OMLX backend: use OpenAI-compatible API (local server)
+        try:
+            base_url = str(getattr(config, "openai_base_url", "http://localhost:11434/v1") or "http://localhost:11434/v1")
+            if override_base_url:
+                base_url = override_base_url
+            # omlx typically doesn't require a real API key
+            api_key = get_openai_api_key() or "dummy"
+            status = get_openai_status(api_key=api_key, base_url=base_url, timeout=5)
+            result["local_models"] = status.get("available_models") or []
+        except Exception:
+            result["local_models"] = []
+    elif backend == "vllm":
+        # vLLM backend: use OpenAI-compatible API (local server)
+        try:
+            base_url = str(getattr(config, "openai_base_url", "http://localhost:8000/v1") or "http://localhost:8000/v1")
+            if override_base_url:
+                base_url = override_base_url
+            api_key = get_openai_api_key() or "dummy"
+            status = get_openai_status(api_key=api_key, base_url=base_url, timeout=5)
+            result["local_models"] = status.get("available_models") or []
+        except Exception:
+            result["local_models"] = []
+
+    # 2. Cloud models from OpenAI-compatible endpoint (only for 'openai' backend)
+    if backend == "openai":
+        def _resolve_base_url() -> str:
+            if override_base_url:
+                return override_base_url
+            return str(getattr(config, "openai_base_url", "https://api.openai.com/v1") or "https://api.openai.com/v1")
+
+        api_key = get_openai_api_key()
+        # Also try override_provider or the DB-stored cloud_provider
+        if override_provider and override_provider != "openai":
+            from services.secret_store import get_cloud_api_key
+            api_key = get_cloud_api_key(override_provider)
+        elif not api_key:
+            cloud_provider = str(getattr(config, "cloud_provider", "") or "").strip().lower()
+            if cloud_provider and cloud_provider != "openai":
+                from services.secret_store import get_cloud_api_key
+                api_key = get_cloud_api_key(cloud_provider)
+        if api_key:
             try:
                 from services.openai_client import get_openai_status
                 base_url = _resolve_base_url()
-                status = get_openai_status(api_key=env_key, base_url=base_url, timeout=5)
+                status = get_openai_status(api_key=api_key, base_url=base_url, timeout=5)
                 result["cloud_models"] = status.get("available_models") or []
             except Exception:
                 result["cloud_models"] = []
+        else:
+            # Also try env var fallback
+            import os
+            env_key = os.getenv("OPENAI_API_KEY", "").strip()
+            if env_key:
+                try:
+                    from services.openai_client import get_openai_status
+                    base_url = _resolve_base_url()
+                    status = get_openai_status(api_key=env_key, base_url=base_url, timeout=5)
+                    result["cloud_models"] = status.get("available_models") or []
+                except Exception:
+                    result["cloud_models"] = []
 
     return result
 
