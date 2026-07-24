@@ -4,9 +4,18 @@ News source configuration for 1-hour freshness requirement.
 PREFER DIRECT RSS FEEDS over Google News RSS whenever possible.
 Direct RSS feeds avoid redirect issues and are more reliable.
 
+UPDATE (2026-07-24): Google News RSS feeds are returning 503 Service Unavailable errors.
+All Google News RSS sources have been disabled (enabled=False) until alternatives are found.
+
+Working alternatives added:
+- Financial Times: https://www.ft.com/rss/world
+- BBC Business: http://feeds.bbci.co.uk/news/business/rss.xml
+- Al Jazeera Business: https://www.aljazeera.com/xml/rss/all.xml
+- The Guardian Business: https://www.theguardian.com/business/rss
+
 Strategy:
 1. Use direct RSS feeds from publishers (CNBC, Reuters, Bloomberg, etc.)
-2. Only use Google News RSS as fallback for publishers without RSS
+2. Google News RSS is DEPRECATED - all sources disabled due to 503 errors
 3. All feeds polled frequently (every 15-30 minutes)
 """
 
@@ -64,20 +73,20 @@ NEWS_SOURCES = {
             priority=2,
             fetch_interval_minutes=30,
         ),
-        # Reuters - direct RSS failed (401), use Google News as fallback
+        # Reuters - direct RSS failed (401), use Financial Times as alternative
         NewsSource(
-            name="Reuters Markets",
-            url="https://news.google.com/rss/search?q=site:reuters.com+markets+stocks+when:1h&hl=en-US&gl=US&ceid=US:en",
-            source_type=SourceType.GOOGLE_NEWS,
+            name="Financial Times Markets",
+            url="https://www.ft.com/rss/world",
+            source_type=SourceType.DIRECT_RSS,
             category="markets",
             priority=1,
             fetch_interval_minutes=15,
         ),
-        # Bloomberg doesn't offer free RSS, use Google News as fallback
+        # Bloomberg doesn't offer free RSS, use BBC Business as alternative
         NewsSource(
-            name="Bloomberg Markets",
-            url="https://news.google.com/rss/search?q=site:bloomberg.com+markets+when:1h&hl=en-US&gl=US&ceid=US:en",
-            source_type=SourceType.GOOGLE_NEWS,
+            name="BBC Business",
+            url="http://feeds.bbci.co.uk/news/business/rss.xml",
+            source_type=SourceType.DIRECT_RSS,
             category="markets",
             priority=2,
             fetch_interval_minutes=30,
@@ -102,11 +111,11 @@ NEWS_SOURCES = {
     
     # Forex & Currencies
     "forex": [
-        # Forex Factory RSS failed (403), use Google News instead
+        # Forex Factory RSS failed (403), use Al Jazeera Business as alternative
         NewsSource(
-            name="Forex News (Google)",
-            url='https://news.google.com/rss/search?q=("forex"+OR+"currency")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
+            name="Al Jazeera Business",
+            url="https://www.aljazeera.com/xml/rss/all.xml",
+            source_type=SourceType.DIRECT_RSS,
             category="forex",
             priority=2,
             fetch_interval_minutes=30,
@@ -151,11 +160,11 @@ NEWS_SOURCES = {
             priority=1,
             fetch_interval_minutes=30,
         ),
-        # ECB RSS failed (404), use Google News instead
+        # ECB official RSS feed for press releases
         NewsSource(
-            name="ECB Press Releases (Google)",
-            url="https://news.google.com/rss/search?q=site:ecb.europa.eu+press+release+when:1h&hl=en-US&gl=US&ceid=US:en",
-            source_type=SourceType.GOOGLE_NEWS,
+            name="ECB Press Releases",
+            url="https://www.ecb.europa.eu/press/pr/rss.xml",
+            source_type=SourceType.DIRECT_RSS,
             category="central_banks",
             priority=1,
             fetch_interval_minutes=30,
@@ -176,238 +185,130 @@ NEWS_SOURCES = {
     
     # Fixed Income & Bonds
     "bonds": [
+        # Google News RSS deprecated - 503 errors
+        # TODO: Find direct RSS alternatives for bond market news
         NewsSource(
-            name="Bond Market (Google)",
-            url='https://news.google.com/rss/search?q=("bond+market"+OR+"treasury+yields"+OR+"bond+yields")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="bonds",
-            priority=2,
-            fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Treasury Watch (Google)",
+            name="Treasury Watch (Disabled - Google News 503)",
             url='https://news.google.com/rss/search?q=("US+Treasury"+OR+"10-year+yield"+OR+"2-year+yield")+when:1h&hl=en-US&gl=US&ceid=US:en',
             source_type=SourceType.GOOGLE_NEWS,
             category="bonds",
             priority=1,
             fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Corporate Bonds (Google)",
-            url='https://news.google.com/rss/search?q=("corporate+bond"+OR+"high+yield"+OR+"credit+spread")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="bonds",
-            priority=3,
-            fetch_interval_minutes=30,
+            enabled=False,  # Disabled due to 503 errors
         ),
     ],
     
     # Commodities & Futures
     "commodities": [
-        # OilPrice.com RSS failed (404), use Google News instead
+        # Google News RSS deprecated - 503 errors
+        # TODO: Find direct RSS alternatives for commodities news
         NewsSource(
-            name="Oil & Gas (Google)",
+            name="Commodities (Disabled - Google News 503)",
             url='https://news.google.com/rss/search?q=(oil+price+OR+OPEC+OR+"crude+oil"+OR+WTI+OR+Brent)+when:1h&hl=en-US&gl=US&ceid=US:en',
             source_type=SourceType.GOOGLE_NEWS,
             category="commodities",
             priority=1,
             fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Gold & Metals (Google)",
-            url='https://news.google.com/rss/search?q=(gold+price+OR+silver+price+OR+copper+OR+"precious+metals")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="commodities",
-            priority=1,
-            fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Agriculture (Google)",
-            url='https://news.google.com/rss/search?q=(wheat+OR+corn+OR+soybeans+OR+coffee)+price+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="commodities",
-            priority=2,
-            fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Commodity Trading (Google)",
-            url='https://news.google.com/rss/search?q=("commodity+trading"+OR+CME+OR+NYMEX+OR+COMEX)+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="commodities",
-            priority=2,
-            fetch_interval_minutes=30,
+            enabled=False,  # Disabled due to 503 errors
         ),
     ],
     
     # Economic Data & Indicators
     "economic": [
+        # Google News RSS deprecated - 503 errors
+        # TODO: Find direct RSS alternatives for economic data news
         NewsSource(
-            name="Economic Data (Google)",
+            name="Economic Data (Disabled - Google News 503)",
             url='https://news.google.com/rss/search?q=(CPI+OR+inflation+OR+GDP+OR+"jobs+report")+when:1h&hl=en-US&gl=US&ceid=US:en',
             source_type=SourceType.GOOGLE_NEWS,
             category="economic",
             priority=1,
             fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Trade & Tariffs (Google)",
-            url='https://news.google.com/rss/search?q=(tariff+OR+"trade+war"+OR+"trade+deficit")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="economic",
-            priority=1,
-            fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Housing Market (Google)",
-            url='https://news.google.com/rss/search?q=("housing+market"+OR+"home+prices"+OR+"mortgage+rates")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="economic",
-            priority=2,
-            fetch_interval_minutes=30,
+            enabled=False,  # Disabled due to 503 errors
         ),
     ],
     
     # IPOs & Earnings
     "ipo": [
+        # Google News RSS deprecated - 503 errors
         NewsSource(
-            name="IPO News (Google)",
+            name="IPO News (Disabled - Google News 503)",
             url='https://news.google.com/rss/search?q=(IPO+OR+"initial+public+offering"+OR+SPAC)+when:1h&hl=en-US&gl=US&ceid=US:en',
             source_type=SourceType.GOOGLE_NEWS,
             category="ipo",
             priority=2,
             fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Earnings Reports (Google)",
-            url='https://news.google.com/rss/search?q=("earnings+report"+OR+"quarterly+earnings"+OR+"revenue")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="ipo",
-            priority=1,
-            fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="M&A News (Google)",
-            url='https://news.google.com/rss/search?q=("merger"+OR+"acquisition"+OR+"takeover")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="ipo",
-            priority=2,
-            fetch_interval_minutes=30,
+            enabled=False,  # Disabled due to 503 errors
         ),
     ],
     
     # Derivatives & Options
     "derivatives": [
+        # Google News RSS deprecated - 503 errors
         NewsSource(
-            name="Options Market (Google)",
+            name="Options Market (Disabled - Google News 503)",
             url='https://news.google.com/rss/search?q=("options+market"+OR+"put+call+ratio"+OR+VIX)+when:1h&hl=en-US&gl=US&ceid=US:en',
             source_type=SourceType.GOOGLE_NEWS,
             category="derivatives",
             priority=2,
             fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Futures Trading (Google)",
-            url='https://news.google.com/rss/search?q=("futures+trading"+OR+"S%26P+500+futures")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="derivatives",
-            priority=2,
-            fetch_interval_minutes=30,
+            enabled=False,  # Disabled due to 503 errors
         ),
     ],
     
     # Fintech & Trading Technology
     "fintech": [
+        # Google News RSS deprecated - 503 errors
         NewsSource(
-            name="Fintech News (Google)",
+            name="Fintech News (Disabled - Google News 503)",
             url='https://news.google.com/rss/search?q=(fintech+OR+"payment+technology"+OR+neobank)+when:1h&hl=en-US&gl=US&ceid=US:en',
             source_type=SourceType.GOOGLE_NEWS,
             category="fintech",
             priority=3,
             fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Trading Tech (Google)",
-            url='https://news.google.com/rss/search?q=("algorithmic+trading"+OR+"trading+platform")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="fintech",
-            priority=3,
-            fetch_interval_minutes=30,
+            enabled=False,  # Disabled due to 503 errors
         ),
     ],
     
     # Institutional Investors
     "institutional": [
+        # Google News RSS deprecated - 503 errors
         NewsSource(
-            name="Hedge Fund News (Google)",
+            name="Hedge Fund News (Disabled - Google News 503)",
             url='https://news.google.com/rss/search?q=("hedge+fund"+OR+Bridgewater+OR+Citadel)+when:1h&hl=en-US&gl=US&ceid=US:en',
             source_type=SourceType.GOOGLE_NEWS,
             category="institutional",
             priority=3,
             fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Private Equity (Google)",
-            url='https://news.google.com/rss/search?q=("private+equity"+OR+Blackstone+OR+KKR)+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="institutional",
-            priority=3,
-            fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Sovereign Wealth (Google)",
-            url='https://news.google.com/rss/search?q=("sovereign+wealth"+OR+"pension+fund")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="institutional",
-            priority=3,
-            fetch_interval_minutes=30,
+            enabled=False,  # Disabled due to 503 errors
         ),
     ],
     
     # GCC Business & Investment News
     "gcc": [
+        # Google News RSS deprecated - 503 errors
         NewsSource(
-            name="Arabian Business (Google)",
+            name="Gulf Business (Disabled - Google News 503)",
             url='https://news.google.com/rss/search?q=site:arabianbusiness.com+(Saudi+Arabia+OR+UAE)+when:1h&hl=en-US&gl=US&ceid=US:en',
             source_type=SourceType.GOOGLE_NEWS,
             category="gcc",
             priority=3,
             fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Gulf FDI (Google)",
-            url='https://news.google.com/rss/search?q=(PIF+OR+"DP+World"+OR+Mubadala+OR+ADNOC)+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="gcc",
-            priority=3,
-            fetch_interval_minutes=30,
+            enabled=False,  # Disabled due to 503 errors
         ),
     ],
     
     # Market Analysis & Outlook
     "analysis": [
+        # Google News RSS deprecated - 503 errors
         NewsSource(
-            name="Market Outlook (Google)",
+            name="Market Outlook (Disabled - Google News 503)",
             url='https://news.google.com/rss/search?q=("market+outlook"+OR+"stock+market+forecast")+when:1h&hl=en-US&gl=US&ceid=US:en',
             source_type=SourceType.GOOGLE_NEWS,
             category="analysis",
             priority=2,
             fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Risk & Volatility (Google)",
-            url='https://news.google.com/rss/search?q=(VIX+OR+"market+volatility"+OR+"market+correction")+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="analysis",
-            priority=2,
-            fetch_interval_minutes=30,
-        ),
-        NewsSource(
-            name="Bank Research (Google)",
-            url='https://news.google.com/rss/search?q=("Goldman+Sachs"+OR+"JPMorgan"+OR+"Morgan+Stanley")+forecast+when:1h&hl=en-US&gl=US&ceid=US:en',
-            source_type=SourceType.GOOGLE_NEWS,
-            category="analysis",
-            priority=2,
-            fetch_interval_minutes=30,
+            enabled=False,  # Disabled due to 503 errors
         ),
     ],
 }

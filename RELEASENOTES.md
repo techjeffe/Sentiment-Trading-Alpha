@@ -1,3 +1,45 @@
+# Release Notes — 2026-07-24
+
+## Fix: Google News RSS 503 Service Unavailable Errors
+
+Google News RSS feeds started returning 503 Service Unavailable errors, causing spam in logs and failed news ingestion.
+
+### Root Cause
+Google is deprecating/throttling their RSS search API (`news.google.com/rss/search`). All requests return 503 errors.
+
+### Changes Made
+
+**1. Disabled all Google News RSS sources** (`backend/config/news_sources.py`)
+- Set `enabled=False` on all Google News RSS sources (18 sources across 12 categories)
+- Categories affected: markets, forex, central_banks, bonds, commodities, economic, ipo, derivatives, fintech, institutional, gcc, analysis
+- Added working alternative RSS feeds:
+  - Financial Times: `https://www.ft.com/rss/world`
+  - BBC Business: `http://feeds.bbci.co.uk/news/business/rss.xml`
+  - Al Jazeera Business: `https://www.aljazeera.com/xml/rss/all.xml`
+
+**2. Added graceful 503 handling** (`backend/services/data_ingestion/parser.py`)
+- RSS parser now detects 503 errors and logs them as `[SKIPPED]` instead of `[ERROR]`
+- Prevents log spam and allows system to continue operating
+
+**3. Added graceful 503 handling** (`backend/services/web_research.py`)
+- `_fetch_query_results()` now catches 503 errors and returns empty results
+- Prevents web research from crashing when Google News RSS fails
+- Logs skipped queries with `[SKIPPED]` prefix
+
+**4. Updated documentation** (`backend/config/news_sources.py`)
+- Updated module docstring to explain Google News RSS deprecation
+- Marked all Google News sources as disabled until alternatives found
+
+### Config Changes
+- `logic_config.json`: No changes
+- News sources: 14 direct RSS feeds now enabled, 18 Google News feeds disabled
+
+### Testing
+- Verified all edited files have valid Python syntax (`py_compile`)
+- Enabled sources count: 14 (all direct RSS, no Google News)
+
+---
+
 # Release Notes — 2026-07-22
 
 ## Fix: Backend Test Failures (Groups A-E)

@@ -253,12 +253,22 @@ def _score_item(symbol: str, item: Dict[str, str], max_age_days: int, company_al
 
 def _fetch_query_results(query: str, timeout: int) -> List[Dict[str, str]]:
     url = GOOGLE_NEWS_SEARCH_URL.format(query=quote_plus(query))
-    response = requests.get(
-        url,
-        timeout=timeout,
-        headers={"User-Agent": "SentimentTradingAlpha/1.0"},
-    )
-    response.raise_for_status()
+    try:
+        response = requests.get(
+            url,
+            timeout=timeout,
+            headers={"User-Agent": "SentimentTradingAlpha/1.0"},
+        )
+        # Handle 503 Service Unavailable gracefully - Google News RSS is deprecating
+        if response.status_code == 503:
+            print(f"[SKIPPED] Google News RSS query '{query[:50]}...' - 503 Service Unavailable")
+            return []
+        response.raise_for_status()
+    except requests.RequestException as e:
+        # Log error but don't crash - return empty results
+        print(f"[ERROR] Google News RSS fetch failed for query '{query[:50]}...': {e}")
+        return []
+    
     root = ET.fromstring(response.text)
     channel = root.find("channel")
     results: List[Dict[str, str]] = []
