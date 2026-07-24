@@ -160,10 +160,10 @@ NEWS_SOURCES = {
             priority=1,
             fetch_interval_minutes=30,
         ),
-        # ECB RSS failed (404), use Financial Times as alternative
+        # ECB official RSS feed for press releases
         NewsSource(
-            name="Financial Times (ECB Coverage)",
-            url="https://www.ft.com/rss/world",
+            name="ECB Press Releases",
+            url="https://www.ecb.europa.eu/press/pr/rss.xml",
             source_type=SourceType.DIRECT_RSS,
             category="central_banks",
             priority=1,
