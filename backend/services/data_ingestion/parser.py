@@ -141,7 +141,11 @@ class RSSFeedParser:
                 articles.append(article)
                 
         except requests.RequestException as e:
-            print(f"Request error for {feed_url}: {e}")
+            # Handle 503 Service Unavailable gracefully - Google News RSS is deprecating
+            if hasattr(e, 'response') and e.response is not None and e.response.status_code == 503:
+                print(f"[SKIPPED] {feed_url} - 503 Service Unavailable (Google News RSS likely deprecated)")
+            else:
+                print(f"Request error for {feed_url}: {e}")
         except Exception as e:
             print(f"Parse error for {feed_url}: {e}")
         
