@@ -509,6 +509,7 @@ class PipelineService:
                 try:
                     from services.app_config import release_analysis_lock
                     release_analysis_lock(db, self.request_id)
+                    print(f"[pipeline] Lock released: {self.request_id}")
                 except Exception as exc:
                     print(f"[pipeline] Error releasing analysis lock: {exc}")
 
@@ -554,18 +555,30 @@ class PipelineService:
         """
         from services.app_config import try_acquire_analysis_lock
 
-        acquired = try_acquire_analysis_lock(
-            db,
-            request_id,
-            lease_seconds=ANALYSIS_LOCK_LEASE_SECONDS,
-        )
-        if not acquired:
-            raise RuntimeError(
-                f"Analysis already in progress (lock held by another request). "
-                f"Request {request_id} rejected to prevent concurrent pipeline runs."
+        # Try to acquire the lock with retries (handle transient conflicts)
+        max_retries = 3
+        retry_delay = 2  # seconds
+        
+        for attempt in range(max_retries):
+            acquired = try_acquire_analysis_lock(
+                db,
+                request_id,
+                lease_seconds=ANALYSIS_LOCK_LEASE_SECONDS,
             )
-        analysis_id = str(uuid.uuid4())
-        return analysis_id
+            if acquired:
+                print(f"[pipeline] Lock acquired: {request_id}")
+                analysis_id = str(uuid.uuid4())
+                return analysis_id
+            
+            if attempt < max_retries - 1:
+                print(f"[pipeline] Lock acquisition failed (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                await asyncio.sleep(retry_delay)
+        
+        # Failed after all retries
+        raise RuntimeError(
+            f"Analysis already in progress (lock held by another request). "
+            f"Request {request_id} rejected to prevent concurrent pipeline runs."
+        )
 
     async def _refresh_lock_loop(self, db: Session, request_id: str) -> None:
         """Periodically refresh the DB-backed lease while the pipeline runs.

@@ -790,3 +790,29 @@ class DecisionLogFeedback(DecisionLogBase):
     analysis_data = Column(Text, nullable=True)
     timestamp_data = Column(String(64), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False)
+
+
+class TradingOpportunity(Base):
+    """Model for storing discovered trading opportunities that users want to track."""
+    __tablename__ = "trading_opportunities"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    score = Column(Integer, nullable=False)
+    sentiment = Column(String(20), nullable=False)
+    reasoning = Column(Text)
+    source_count = Column(Integer, default=0)
+    signal_count = Column(Integer, default=0)
+    is_pump_and_dump = Column(Boolean, default=False)
+    flags = Column(JSON, default=list)
+    sources = Column(JSON, default=list)
+    
+    # User action
+    added_at = Column(DateTime, server_default=func.now())
+    status = Column(String(20), default="watchlist")  # watchlist, trading, closed
+    notes = Column(Text)
+    
+    # Unique constraint to prevent duplicates
+    __table_args__ = (
+        UniqueConstraint('symbol', 'status', name='uq_symbol_status'),
+    )

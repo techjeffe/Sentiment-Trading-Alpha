@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import DispatchErrorBanner from "@/components/DispatchErrorBanner";
@@ -431,6 +432,8 @@ function AlpacaEquityCurve({ history }: { history: AlpacaPortfolioHistory }) {
 // â”€â”€â”€ Main Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function TradingPage() {
+    const searchParams = useSearchParams();
+    const symbolFromUrl = searchParams.get("symbol");
     const [data, setData] = useState<TradingData | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -593,6 +596,14 @@ export default function TradingPage() {
     }, []);
 
     useEffect(() => { load(); loadAlpaca(); }, [load, loadAlpaca]);
+
+    // If a symbol is provided in the URL, show an alert or handle it
+    useEffect(() => {
+        if (symbolFromUrl) {
+            console.log("Symbol from URL:", symbolFromUrl);
+            // You could pre-fill a search, show symbol info, etc.
+        }
+    }, [symbolFromUrl]);
 
     const priceSymbols = useMemo(() => {
         const strategySymbols = data?.open_positions.map(p => p.execution_ticker) ?? [];

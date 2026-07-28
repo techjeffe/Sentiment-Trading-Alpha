@@ -24,10 +24,14 @@ from database.engine import SessionLocal
 from database.models import AnalysisResult
 from database.models import init_db
 from routers.analysis import router as analysis_router
+from routers.alpaca import router as alpaca_router
+from routers.config import router as config_router
 from routers.edgar import router as edgar_router
 from routers.news import router as news_router
 from routers.news_sources import router as news_sources_router
-from services.app_config import config_to_dict_with_stats, get_or_create_app_config, try_acquire_analysis_lock, release_analysis_lock
+from routers.trade_list import router as trade_list_router
+from routers.discovery import router as discovery_router
+from services.app_config import config_to_dict_with_stats, get_or_create_app_config
 from services.pnl_tracker import PnLTracker, SCHEDULER_INTERVAL_SECONDS
 from services.data_ingestion.worker import run_ingestion_cycle
 from services.data_ingestion.yfinance_client import PriceClient
@@ -267,7 +271,8 @@ async def _auto_analysis_scheduler_loop():
     """Auto-analysis scheduler — runs sentiment analysis on configured interval.
     
     Triggers analysis when auto_run_enabled is true, using auto_run_interval_minutes
-    from the database config. Respects the analysis lock to prevent concurrent runs.
+    from the database config. The PipelineService handles lock acquisition internally
+    to prevent concurrent runs.
     """
     startup_grace_seconds = 30
     print(f"Auto-analysis scheduler: waiting {startup_grace_seconds}s before first check")
@@ -276,7 +281,6 @@ async def _auto_analysis_scheduler_loop():
     while True:
         try:
             db = None
-            request_id = None
             try:
                 db = SessionLocal()
                 config = get_or_create_app_config(db)
@@ -319,15 +323,13 @@ async def _auto_analysis_scheduler_loop():
                     await asyncio.sleep(sleep_interval)
                     continue
                 
-                # Try to acquire analysis lock
-                request_id = f"auto_{int(now.timestamp())}"
-                lock_acquired = try_acquire_analysis_lock(db, request_id, lease_seconds=600)
-                
-                if not lock_acquired:
-                    # Another analysis is running, retry later
-                    print("[auto-analysis] Skipped: analysis lock held by another process")
-                    await asyncio.sleep(30)
-                    continue
+                # Force-release any stale lock before attempting to run
+                # This handles cases where a previous run crashed without releasing the lock
+                try:
+                    from services.app_config import force_release_stale_analysis_lock
+                    force_release_stale_analysis_lock(db)
+                except Exception as cleanup_exc:
+                    print(f"[auto-analysis] Warning: stale lock cleanup failed: {cleanup_exc}")
                 
                 print(f"[auto-analysis] Starting scheduled analysis (interval: {interval_minutes} min)")
                 
@@ -335,6 +337,10 @@ async def _auto_analysis_scheduler_loop():
                 try:
                     # Get tracked symbols from config
                     symbols = config.tracked_symbols or ["USO", "IBIT", "QQQ", "SPY"]
+                    
+                    # Generate request ID for tracking
+                    import uuid
+                    request_id = str(uuid.uuid4())
                     
                     # Create analysis request with defaults
                     request = AnalysisRequest(
@@ -386,16 +392,9 @@ async def _auto_analysis_scheduler_loop():
                         status="error",
                         source="auto_analysis",
                         summary="Auto-analysis failed",
-                        details={"request_id": request_id},
+                        details={},
                         error=str(exc),
                     )
-                finally:
-                    # Release the lock
-                    try:
-                        if db and request_id:
-                            release_analysis_lock(db, request_id)
-                    except Exception as release_exc:
-                        print(f"[auto-analysis] Warning: could not release lock: {release_exc}")
                     
             finally:
                 if db:
@@ -855,9 +854,13 @@ async def get_metrics():
 
 
 app.include_router(analysis_router, prefix="/api/v1", tags=["API"])
+app.include_router(config_router, prefix="/api/v1", tags=["config"])
+app.include_router(alpaca_router, prefix="/api/v1", tags=["alpaca"])
 app.include_router(edgar_router, prefix="/api/v1/edgar", tags=["edgar"])
 app.include_router(news_router, prefix="/api/v1/news", tags=["news"])
 app.include_router(news_sources_router, prefix="/api/v1", tags=["news-sources"])
+app.include_router(trade_list_router, prefix="/api/v1", tags=["trade-list"])
+app.include_router(discovery_router, prefix="/api/v1", tags=["discovery"])
 
 
 if __name__ == "__main__":

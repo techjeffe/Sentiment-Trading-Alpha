@@ -28,8 +28,9 @@ from database.models import ScrapedArticle
 from services.app_config import build_enabled_rss_feed_labels, build_enabled_rss_feed_map, get_or_create_app_config
 from services.data_ingestion.parser import NewsArticle, RSSFeedParser
 from services.sentiment.prompts import expand_proxy_terms_for_matching, normalize_text_for_matching
-from services.data_ingestion.google_news_resolver import resolve_google_news_url, resolve_google_news_urls
 from services.data_ingestion.freshness_filter import FreshnessFilter, filter_fresh_articles
+# Google News resolver disabled - Google News removed as source
+# from services.data_ingestion.google_news_resolver import resolve_google_news_url, resolve_google_news_urls
 from config.news_sources import get_enabled_sources, build_rss_feed_map as build_news_source_map
 
 logger = logging.getLogger(__name__)
@@ -384,31 +385,15 @@ async def run_ingestion_cycle(db: Optional[Session] = None) -> Dict[str, Any]:
         articles = freshness_filter.filter_articles(articles)
         print(f"Freshness filter: {len(articles)}/{articles_before_freshness} articles passed (within 1 hour)")
 
-        # ── Step 2: Resolve Google News Redirects ──
+        # ── Step 2: Google News Redirects (DISABLED - Google News removed as source) ──
+        # Google News resolution disabled - all Google News sources have been removed
         google_news_articles = [
             article for article in articles
             if article.link and "news.google.com/rss" in article.link
         ]
         
         if google_news_articles:
-            print(f"Resolving {len(google_news_articles)} Google News redirects...")
-            urls_to_resolve = [article.link for article in google_news_articles]
-            resolved_urls = await resolve_google_news_urls(urls_to_resolve)
-            
-            # Update articles with resolved URLs
-            for article in google_news_articles:
-                if article.link in resolved_urls:
-                    new_url = resolved_urls[article.link]
-                    if new_url != article.link:
-                        print(f"  Resolved: {article.link[:80]}... -> {new_url[:80]}...")
-                        article.link = new_url
-                        # Update source to reflect actual publisher
-                        if "bloomberg.com" in new_url:
-                            article.source = "Bloomberg"
-                        elif "reuters.com" in new_url:
-                            article.source = "Reuters"
-                        elif "marketwatch.com" in new_url:
-                            article.source = "MarketWatch"
+            print(f"Skipping {len(google_news_articles)} Google News articles (Google News disabled)")
         
         # ── Step 3: Stage 0 Filter (Relevance) ──
         # Articles from Yahoo Finance are relevant by definition —

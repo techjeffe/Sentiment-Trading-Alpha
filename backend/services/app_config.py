@@ -1278,6 +1278,31 @@ def release_analysis_lock(db: Session, request_id: str) -> None:
     db.commit()
 
 
+def force_release_stale_analysis_lock(db: Session) -> bool:
+    """Force-release the analysis lock if it has expired.
+    
+    This is useful for cleaning up stale locks from crashed pipeline runs.
+    Returns True if a stale lock was released, False otherwise.
+    """
+    now = datetime.now(timezone.utc)
+    updated = (
+        db.query(AppConfig)
+        .filter(AppConfig.id == 1)
+        .filter(AppConfig.analysis_lock_expires_at.isnot(None))
+        .filter(AppConfig.analysis_lock_expires_at < now)
+        .update(
+            {
+                AppConfig.analysis_lock_request_id: None,
+                AppConfig.analysis_lock_acquired_at: None,
+                AppConfig.analysis_lock_expires_at: None,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    return bool(updated)
+
+
 def config_to_dict(config: AppConfig) -> Dict[str, Any]:
     seconds_until_next = 0
     can_auto_run_now = True

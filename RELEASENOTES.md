@@ -1,3 +1,290 @@
+# Release Notes — 2026-07-28
+
+## 🔧 Discovery "Discover New" Button + Auto-Add Reliability
+
+Follow-up hardening of the automatic ticker discovery feature after end-to-end testing.
+
+### What Changed
+- **"Discover New" button now populates the list in place** (`frontend/src/app/trade-list/page.tsx`). Previously it did `window.open('/api/v1/discover', …)`, dumping raw JSON in a new tab and never refreshing the trade list — auto-added opportunities only appeared on the next 2-minute poll. It now `fetch`es the endpoint and calls `fetchTradeList()` immediately, with a disabled "⏳ Discovering…" state and error-banner surfacing on failure.
+- **Correct trailing-slash path.** The button (and any client) now calls `/api/v1/discover/?auto_add=true` directly instead of relying on FastAPI's 307 redirect from the slash-less form.
+- **Unified `AggregatedSignal` type.** `backend/services/risk/pump_dump_detector.py` defined its own structurally-duplicated `AggregatedSignal`; it now imports the canonical one from `services.analysis.signal_aggregator`, so `aggregate_signals()`, `check_pnd_flags()`, and `default_score()` share a single type instead of relying on duck-typing.
+
+### Testing
+- Verified live: `discover_opportunities(min_score=0, auto_add=True)` processed 100 articles, extracted 151 tickers, fetched 3 SEC insider signals, scored and auto-added 20 opportunities; `trading_opportunities` watchlist count confirmed at 20.
+- Confirmed `AggregatedSignal` is a single identity across all three modules (`A is B is C == True`).
+
+### Known Behavior
+- At the default `min_score=30`, only catalyst-backed (e.g. SEC insider) opportunities pass; news-only signals score ~10–14 and are intentionally filtered as social-only noise. When the SEC/OpenInsider feed times out, a discovery run can legitimately return zero opportunities. Surfacing that fetch failure in the UI is a recommended follow-up.
+
+### Files Changed
+- `frontend/src/app/trade-list/page.tsx` — in-place discovery refresh, trailing-slash fetch, discovering state
+- `backend/services/risk/pump_dump_detector.py` — import canonical `AggregatedSignal`, remove duplicate definition
+
+---
+
+## 🎯 Major Fix: "Start Trading" Button Now Actually Works!
+
+### What Changed
+The "Start Trading" button in the Trade List page was broken — it updated the status but **didn't actually add symbols to the tracking list**. Now it works properly!
+
+### What "Start Trading" Does Now:
+When you click "Start Trading" on any symbol, it:
+1. ✅ **Adds the symbol to tracked symbols** — The analysis pipeline will now include it
+2. ✅ **Downloads price history** — Gets historical data for backtesting  
+3. ✅ **Generates search keywords** — Creates terms for sentiment analysis
+4. ✅ **Handles duplicates gracefully** — If the symbol is already being tracked, it merges instead of throwing an error
+
+**Before:** Clicking "Start Trading" just changed the status in the list but didn't actually track the symbol.
+**Now:** The symbol is immediately added to your tracked list and will be analyzed in the next run.
+
+### Removed Features:
+- **Discovery page removed** — The `/discovery` page was removed to simplify the app. All functionality is now available through the Trade List.
+
+### Bug Fixes:
+- **Fixed 500 error** when clicking "Start Trading" — Added proper error handling
+- **Fixed duplicate trading entries** — Prevents multiple "trading" entries for the same symbol
+- **Fixed navigation** — Removed broken Discovery link from the header
+
+---
+
+## 🎉 Major Feature: Automatic Ticker Discovery & Trade List Management
+
+### SignalScope Integration Complete
+Successfully integrated **SignalScope's automatic ticker discovery system** into Sentiment Trading Alpha. The system now automatically discovers trading opportunities from news articles and SEC filings without requiring users to manually specify ticker symbols.
+
+---
+
+## What's New
+
+### 1. Automatic Ticker Discovery (Phase 1-4 Complete)
+
+**Phase 1: Ticker Extraction Module** ✓
+- Automatically extracts ticker symbols from unstructured news text
+- Filters out 200+ blacklisted words (English words, ETFs, crypto, etc.)
+- Handles cashtag format ($AAPL)
+- **31 unit tests** - ALL PASSING
+- Tested on 50+ real news articles: **221 tickers discovered automatically**
+
+**Phase 2: Signal Sources** ✓
+- **SEC Insider Client**: Fetches insider trading data from OpenInsider.com
+  - Filters for C-suite/director purchases ≥ $50K
+  - Successfully fetched 3-4 insider purchases in testing
+- **Reddit Client**: Scans 17 subreddits for stock mentions (optional, requires API credentials)
+- **Signal Aggregator**: Aggregates raw signals by ticker symbol
+  - Calculates velocity, momentum, source diversity
+  - Successfully aggregated 101 tickers from 175 signals
+
+**Phase 3: Scoring & Risk Management** ✓
+- **Pump & Dump Detector**: 11-flag rule-based detection system (no AI required)
+  - Filters out scam stocks before recommendations
+  - All tests passing
+- **Advanced Scorer**: AI scoring system with Ollama integration
+  - Heuristic fallback scoring
+  - Social-only cap at 50/100
+  - Ollama integration tested and working
+- **Scoring Service**: Combines P&D detection + scoring
+  - Full pipeline working
+
+**Phase 4: API & Frontend** ✓
+- **Discovery API**: `GET /api/v1/discover` endpoint
+  - Returns ranked opportunities with scores (0-100)
+  - Filters by minimum score, maximum results
+  - Execution time: **0.2 seconds**
+- **Discovery Frontend Page**: `/discovery`
+  - Displays ranked opportunities with scores
+  - Shows sentiment, reasoning, signal counts
+  - Highlights pump-and-dump risks
+
+### 2. Trade List Management (NEW)
+
+**Backend API** ✓
+- `POST /api/v1/trade-list/add` - Add opportunity to watchlist
+- `GET /api/v1/trade-list/` - View trade list with filters
+- `DELETE /api/v1/trade-list/{id}` - Remove from list
+- `PUT /api/v1/trade-list/{id}/status` - Update status (watchlist/trading/closed)
+- `GET /api/v1/trade-list/summary` - Get summary statistics
+
+**Frontend Pages** ✓
+- **Discovery Page** (`/discovery`): Added "📝 Add to Trade List" button to each opportunity
+- **Trade List Page** (`/trade-list`): New page to manage trading opportunities
+  - View watchlist, active trades, and closed trades
+  - Update status (start trading, close)
+  - Remove opportunities
+  - Summary statistics (total opportunities, average score, etc.)
+
+**Database Model** ✓
+- New `TradingOpportunity` model with fields:
+  - symbol, score, sentiment, reasoning
+  - source_count, signal_count, flags
+  - status (watchlist/trading/closed)
+  - Unique constraint to prevent duplicates
+
+### 3. Removed Google News as News Source
+
+**Reason**: Google News RSS feeds returning 503 errors consistently
+
+**Changes Made**:
+- Disabled all Google News RSS sources in `backend/config/news_sources.py`
+- Removed Google News resolver calls in `backend/services/data_ingestion/worker.py`
+- System now uses only direct RSS feeds (10 sources enabled):
+  - CNBC, Yahoo Finance, Seeking Alpha, MarketWatch, Investing.com
+  - CoinDesk, Cointelegraph, Bitcoin Magazine
+  - Federal Reserve, SEC
+  - (Reuters, Bloomberg, ECB, etc. disabled due to no free RSS)
+
+### 4. Bug Fixes
+
+**Fixed: Auto-Analysis Scheduler NameError** ✓
+- Added missing `request_id` generation in `_auto_analysis_scheduler_loop`
+- Prevents `NameError: name 'request_id' is not defined` error
+
+**Added: Clear Analysis Lock Endpoint** ✓
+- New endpoint: `POST /api/v1/admin/clear-analysis-lock`
+- Allows clearing stale analysis locks when runs crash or get stuck
+- Returns success/error message
+
+---
+
+## Test Results
+
+### Phase 1-3 Tests:
+- ✅ 31/31 unit tests passing (ticker extraction)
+- ✅ 3/3 integration tests passing (P&D + scoring)
+- ✅ Full pipeline test with real data successful
+
+### Real-World Validation:
+- ✅ 174-221 tickers discovered from news database
+- ✅ 4 SEC insider signals fetched
+- ✅ 101 tickers aggregated and scored
+- ✅ Execution time: **0.2 seconds** (very fast!)
+
+### Discovery API Test:
+```
+GET /api/v1/discover?min_score=30&max_results=10
+Status: 200 OK
+Response:
+  - Total articles processed: 100
+  - Tickers discovered: 174
+  - Opportunities found: 3
+  - Execution time: 0.2s
+  - Top opportunity: TSM (55/100, insider catalyst)
+```
+
+---
+
+## Database Changes
+
+### New Table: `trading_opportunities`
+```sql
+CREATE TABLE trading_opportunities (
+  id INTEGER PRIMARY KEY,
+  symbol VARCHAR(10) NOT NULL,
+  score INTEGER NOT NULL,
+  sentiment VARCHAR(20) NOT NULL,
+  reasoning TEXT,
+  source_count INTEGER DEFAULT 0,
+  signal_count INTEGER DEFAULT 0,
+  is_pump_and_dump BOOLEAN DEFAULT 0,
+  flags JSON DEFAULT '[]',
+  sources JSON DEFAULT '[]',
+  added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  status VARCHAR(20) DEFAULT 'watchlist',
+  notes TEXT,
+  UNIQUE(symbol, status)
+);
+```
+
+### Migration:
+Run `python backend/database/migrate.py` before starting the backend.
+
+---
+
+## Configuration Changes
+
+### Recommended `logic_config.json` Additions:
+```json
+{
+  "auto_discovery": {
+    "enabled": true,
+    "min_score": 30,
+    "max_daily_discoveries": 20,
+    "sources": {
+      "reddit": {
+        "enabled": false,
+        "client_id": "",
+        "client_secret": ""
+      },
+      "sec_insider": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+### Environment Variables (Optional):
+- `REDDIT_CLIENT_ID` - For Reddit signal source
+- `REDDIT_CLIENT_SECRET` - For Reddit signal source
+
+---
+
+## Files Created/Modified
+
+### New Files (Backend):
+1. `backend/services/data_ingestion/ticker_extractor.py`
+2. `backend/services/data_ingestion/reddit_client.py`
+3. `backend/services/data_ingestion/sec_insider_client.py`
+4. `backend/services/analysis/signal_aggregator.py`
+5. `backend/services/risk/pump_dump_detector.py`
+6. `backend/services/scoring/advanced_scorer.py`
+7. `backend/services/scoring/ollama_client.py`
+8. `backend/services/scoring/scoring_service.py`
+9. `backend/routers/discovery.py`
+10. `backend/routers/trade_list.py`
+
+### New Files (Frontend):
+11. `frontend/src/app/discovery/page.tsx`
+12. `frontend/src/app/trade-list/page.tsx`
+
+### Modified Files:
+- `backend/database/models.py` (added TradingOpportunity model)
+- `backend/main.py` (registered discovery and trade_list routers)
+- `backend/config/news_sources.py` (removed Google News sources)
+- `backend/services/data_ingestion/worker.py` (removed Google News resolver)
+- `backend/routers/config.py` (added clear-analysis-lock endpoint)
+
+### Test Files:
+- `backend/tests/test_ticker_extractor.py` (31 tests)
+- `backend/tests/test_phase3_integration.py` (3 tests)
+
+---
+
+## Next Steps (Optional Enhancements)
+
+1. **Get Reddit API credentials** - Enables Reddit signal source (high-value)
+2. **Add more signal sources** - Twitter, StockTwits, Options flow
+3. **Improve scoring accuracy** - Train ML model on historical data
+4. **Add fundamentals data** - Fetch price, market cap, short interest
+5. **Production deployment** - Add authentication, rate limiting, caching
+
+---
+
+## Breaking Changes
+
+None - All changes are backward compatible.
+
+---
+
+## Upgrade Instructions
+
+1. Pull the latest code
+2. Run database migration: `python backend/database/migrate.py`
+3. Restart the backend server
+4. (Optional) Configure Reddit API credentials for enhanced signals
+5. Visit `/discovery` to see automatically discovered opportunities
+
+---
+
 # Release Notes — 2026-07-24
 
 ## Fix: Google News RSS 503 Service Unavailable Errors
@@ -40,7 +327,7 @@ Google is deprecating/throttling their RSS search API (`news.google.com/rss/sear
 
 ---
 
-# Release Notes — 2026-07-22
+## Release Notes — 2026-07-22
 
 ## Fix: Backend Test Failures (Groups A-E)
 

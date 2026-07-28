@@ -6,6 +6,7 @@ Sentiment Trading Alpha reads financial news, understands what it means using ar
 
 > ⚠️ **Important:** This is experimental software for educational purposes. It is NOT financial advice. Trading involves risk — especially with leveraged ETFs.
 
+
 ---
 
 ## 🎯 What Does It Actually Do?
@@ -174,6 +175,7 @@ docker compose up --build
 ### Unified Navigation
 All pages now share a consistent, persistent top-bar navigation shell. The global nav includes:
 - **Dashboard** — Main sentiment analysis and signal generation
+- **Trade List** — Manage trading opportunities and add symbols to tracking
 - **Trading** — Paper trading simulator and Alpaca live trading
 - **Alpha Analytics** — Performance metrics, IC, attribution, perturbation testing
 - **News & Filings** — Browse RSS articles, Truth Social posts, and SEC EDGAR filings
@@ -233,6 +235,64 @@ The **Alpha Analytics** page is your deep-dive dashboard for understanding syste
 
 ---
 
+## 🔍 Automatic Opportunity Discovery (NEW!)
+
+Sentiment Trading Alpha now **automatically discovers trading opportunities** from your news articles and SEC filings — no manual ticker input required!
+
+### How It Works:
+1. **Scans News Articles** — Reads your news database automatically
+2. **Extracts Tickers** — Identifies stock symbols using advanced pattern matching (221+ tickers discovered in testing)
+3. **Fetches SEC Insider Data** — Finds recent insider purchases (C-suite/Director buys ≥ $50K)
+4. **Scores Opportunities** — Rates each opportunity 0-100 based on catalyst strength
+5. **Filters Scams** — 11-flag pump-and-dump detection system
+6. **Ranks & Presents** — Shows you the best opportunities first
+
+### Discovery Features:
+- **Automatic Ticker Extraction** — No need to manually specify symbols
+- **Insider Trading Signals** — Real SEC insider purchase data
+- **AI-Powered Scoring** — Ollama integration for intelligent scoring
+- **Risk Detection** — Automatic pump-and-dump filtering
+- **Fast Performance** — Full pipeline runs in 0.2 seconds
+
+### How to Use:
+1. Visit the **Discovery Page** at [http://localhost:3000/discovery](http://localhost:3000/discovery)
+2. Click "🔍 Discover Opportunities" to scan your news database
+3. Review the ranked list of opportunities with scores and reasoning
+4. Click "📝 Add to Trade List" to save interesting opportunities
+5. Visit the **Trade List** page to manage your watchlist
+
+---
+
+## 📝 Trade List & "Start Trading" Feature
+
+The **Trade List** lets you save interesting symbols and — most importantly — **adds them to active tracking** when you're ready to trade.
+
+### How "Start Trading" Works:
+When you click "Start Trading" on any symbol in your Trade List:
+1. ✅ **Adds the symbol to tracked symbols** — The analysis pipeline will now include it automatically
+2. ✅ **Downloads price history** — Gets historical data for backtesting
+3. ✅ **Generates search keywords** — Creates terms for sentiment analysis
+4. ✅ **Updates your list** — Moves the opportunity to "trading" status
+
+**The result:** Symbols you add via "Start Trading" will immediately start being analyzed in the next sentiment analysis run!
+
+### Trade List Features:
+- **Save Opportunities** — Keep track of symbols you want to monitor
+- **Start Trading** — Add symbols to active tracking with one click
+- **Organize by Status** — Filter by watchlist, active trades, or closed trades
+- **Track Performance** — Monitor your saved opportunities over time
+- **Quick Actions** — Update status, remove from list
+- **Summary Statistics** — View total opportunities, average scores, and more
+
+### How to Use:
+1. Add symbols to your Trade List from anywhere in the app
+2. Visit the **Trade List page** at [http://localhost:3000/trade-list](http://localhost:3000/trade-list)
+3. Click "Start Trading" on any symbol you want to actively track
+4. The symbol is now added to your tracked list and will be analyzed automatically
+5. Verify it's being tracked by checking the Admin panel ("Symbols + RSS")
+
+---
+
 ## ⚙️ Configuration (Made Simple)
 
 Everything is configured through a friendly **Admin Web Interface** — no coding required!
@@ -241,8 +301,21 @@ Everything is configured through a friendly **Admin Web Interface** — no codin
 - **Which stocks/ETFs to analyze** — SPY, QQQ, USO, Bitcoin funds, or add your own
 - **How often to check news** — Every 30 minutes? Every hour?
 - **Risk level** — Conservative, moderate, or aggressive
-- **News sources** — Choose which RSS feeds to monitor
+- **News sources** — Choose which RSS feeds to monitor (Google News removed due to 503 errors)
 - **AI settings** — Switch between local and cloud AI, pick different models
+
+### 📰 News Sources (Updated)
+
+**⚠️ Google News Removed**: Google News RSS feeds were consistently returning 503 errors, so all Google News sources have been disabled. The system now uses only direct RSS feeds from publisher websites.
+
+**Current Enabled Sources** (10 total):
+- **Markets**: CNBC, Yahoo Finance, Seeking Alpha, MarketWatch, Investing.com
+- **Crypto**: CoinDesk, Cointelegraph, Bitcoin Magazine  
+- **Central Banks**: Federal Reserve, SEC
+- **Note**: Reuters, Bloomberg, ECB, and others are disabled due to lack of free RSS feeds
+
+**Optional Sources** (require API credentials):
+- **Reddit**: 17 subreddits for stock mentions (requires Reddit API credentials)
 
 ### How to Access Admin:
 1. Start the app
@@ -380,6 +453,25 @@ npm run dev:verbose
 **Disclaimer:** This software is for educational and research purposes only. It is NOT financial advice. The creators are not financial advisors. Trading involves substantial risk of loss. Past performance does not guarantee future results. Consult a qualified financial advisor before making investment decisions.
 
 **No Liability:** The creators of this software are not responsible for any financial losses incurred from using this tool.
+
+---
+
+## 🙏 Attribution
+
+This project incorporates components from **[SignalScope](https://github.com/aleibovici/signalscope)** (MIT License) for automatic ticker discovery and signal aggregation.
+
+**Copyright (c) 2026 SignalScope contributors**
+
+The following modules were ported from SignalScope:
+- `backend/services/data_ingestion/ticker_extractor.py` - Automatic ticker extraction from text
+- `backend/services/data_ingestion/reddit_client.py` - Reddit signal source
+- `backend/services/data_ingestion/sec_insider_client.py` - SEC insider trading data
+- `backend/services/analysis/signal_aggregator.py` - Signal aggregation by ticker
+- `backend/services/risk/pump_dump_detector.py` - Pump-and-dump detection
+- `backend/services/scoring/advanced_scorer.py` - Advanced scoring system
+- `backend/services/scoring/ollama_client.py` - Ollama integration
+
+SignalScope's automatic ticker discovery system enables this project to find trading opportunities without manual ticker input. Thank you to the SignalScope contributors!
 
 ---
 

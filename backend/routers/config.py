@@ -232,6 +232,50 @@ async def _generate_symbol_keywords_background(symbols: List[str], model_name: s
         db.close()
 
 
+@router.post("/config/tracked-symbols/add", tags=["Config"])
+async def add_tracked_symbol(
+    payload: Dict[str, str],
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Add a symbol to tracked symbols (custom_symbols)."""
+    symbol = str(payload.get("symbol", "")).upper().strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="Symbol is required")
+    
+    config = get_or_create_app_config(db)
+    custom_symbols = list(config.custom_symbols or [])
+    
+    if symbol in custom_symbols:
+        return {"ok": True, "message": f"{symbol} is already tracked", "tracked_symbols": config.tracked_symbols}
+    
+    custom_symbols.append(symbol)
+    config.custom_symbols = custom_symbols
+    db.add(config)
+    db.commit()
+    db.refresh(config)
+    
+    # Trigger background tasks for new symbol
+    from services.data_ingestion.yfinance_client import PriceClient
+    try:
+        client = PriceClient()
+        client.pull_and_store_history(symbols=[symbol], db=db, delay_seconds=1.0)
+    except Exception as e:
+        print(f"Price history pull error for {symbol}: {e}")
+    
+    record_audit_event(
+        action="add_tracked_symbol",
+        resource="config",
+        detail=f"Added {symbol} to tracked symbols",
+        event_metadata={"symbol": symbol},
+    )
+    
+    return {
+        "ok": True,
+        "message": f"{symbol} added to tracked symbols",
+        "tracked_symbols": config.tracked_symbols,
+    }
+
+
 @router.put("/config", tags=["Config"])
 async def put_config(
     payload: Dict[str, Any],
@@ -691,3 +735,34 @@ async def pull_price_history(
         "symbols": results,
         "total_rows_added": total_rows,
     }
+@router.post("/admin/clear-analysis-lock", tags=["Admin"])
+async def clear_analysis_lock(
+    _admin: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    """Clear the analysis lock to allow new analysis runs.
+    
+    Use this when an analysis run crashes or gets stuck and leaves
+    a stale lock in the database.
+    """
+    try:
+        config = get_or_create_app_config(db)
+        
+        # Clear all lock fields
+        config.analysis_lock_request_id = None
+        config.analysis_lock_acquired_at = None
+        config.analysis_lock_expires_at = None
+        
+        db.add(config)
+        db.commit()
+        
+        return {
+            "status": "success",
+            "message": "Analysis lock cleared successfully"
+        }
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to clear analysis lock: {str(exc)}"
+        )

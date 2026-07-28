@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
-import { Activity, TrendingUp, FileText, Heart, Settings, BarChart3, Menu, X, Info } from "lucide-react";
+import { Activity, TrendingUp, FileText, Heart, Settings, BarChart3, Menu, X, Info, Search, List } from "lucide-react";
 
 type NavItem = {
   href: string;
@@ -17,6 +17,7 @@ const navItems: NavItem[] = [
   { href: "/trading", label: "Trading", icon: <TrendingUp size={16} /> },
   { href: "/alpha", label: "Alpha Analytics", icon: <BarChart3 size={16} /> },
   { href: "/news", label: "News & Filings", icon: <FileText size={16} /> },
+  { href: "/trade-list", label: "Trade List", icon: <List size={16} /> },
   { href: "/health", label: "System Health", icon: <Heart size={16} /> },
   { href: "/admin", label: "Admin", icon: <Settings size={16} /> },
   { href: "/about", label: "About", icon: <Info size={16} /> },
