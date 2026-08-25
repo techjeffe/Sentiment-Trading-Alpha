@@ -126,6 +126,14 @@ async def get_unified_news(
             
             window_q = db.query(ScrapedArticle)
             
+            # Apply the source predicate to the query BEFORE the window limit,
+            # otherwise the candidate set is trimmed to the newest N global rows
+            # first and matching rows of a narrower source (e.g. Truth Social)
+            # that fall outside that window get discarded before ticker
+            # extraction — producing a false "no matches" for that source.
+            if source == "truth_social":
+                window_q = window_q.filter(ScrapedArticle.source.ilike("%truth%"))
+            
             if date_filter.get("start"):
                 window_q = window_q.filter(ScrapedArticle.published_at >= date_filter["start"])
             
@@ -137,9 +145,6 @@ async def get_unified_news(
             ).limit(SYMBOL_FILTER_ARTICLE_WINDOW)
             
             window = window_q.all()
-            
-            if source == "truth_social":
-                window = [a for a in window if "truth" in (a.source or "").lower()]
             
             article_rows = [
                 a for a in window

@@ -212,7 +212,7 @@ async def get_trade_list(
 
 
 @router.get("/{opportunity_id}/sources")
-async def get_opportunity_sources(opportunity_id: int):
+async def get_opportunity_sources(opportunity_id: int, db=None):
     """
     Get a detailed per-source breakdown for a trading opportunity.
 
@@ -222,8 +222,13 @@ async def get_opportunity_sources(opportunity_id: int):
       from the database where possible
 
     This powers the "Sources" detail modal on the trade-list page.
+
+    db is optional and injected for testability; when omitted a session is
+    created for the duration of the call.
     """
-    db = SessionLocal()
+    own_session = db is None
+    if db is None:
+        db = SessionLocal()
     try:
         opportunity = db.query(TradingOpportunity).filter(
             TradingOpportunity.id == opportunity_id
@@ -235,12 +240,22 @@ async def get_opportunity_sources(opportunity_id: int):
         symbol = (opportunity.symbol or "").upper()
         source_names = _coerce_sources(opportunity.sources)
 
-        # Reconstruct NEWS items: recent articles that mention the symbol.
-        # Mirrors the discovery pipeline (most recent 100 articles, ticker extraction).
+        # Reconstruct NEWS items: articles that mention the symbol and were
+        # present when this opportunity was discovered.  Mirroring the discovery
+        # pipeline (newest 100 at discovery time), we anchor the window to
+        # opportunity.added_at instead of the *current* newest rows — otherwise a
+        # NEWS-backed entry opened more than 100 articles ago would report 0
+        # evidence for a score that still says NEWS contributed.
         news_items: List[dict] = []
         if "NEWS" in source_names:
             from services.data_ingestion.ticker_extractor import extract_tickers_from_article
-            articles = db.query(ScrapedArticle).order_by(
+            # >= allows for the server_default=func.now() timestamp jitter and a
+            # row that lands in the same instant the opportunity was created.
+            cutoff = opportunity.added_at
+            q = db.query(ScrapedArticle)
+            if cutoff is not None:
+                q = q.filter(ScrapedArticle.discovered_at <= cutoff)
+            articles = q.order_by(
                 ScrapedArticle.discovered_at.desc()
             ).limit(100).all()
             for a in articles:
@@ -320,7 +335,8 @@ async def get_opportunity_sources(opportunity_id: int):
         }
 
     finally:
-        db.close()
+        if own_session:
+            db.close()
 
 
 @router.delete("/{opportunity_id}")
