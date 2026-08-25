@@ -72,7 +72,7 @@ def _calculate_adaptive_stop_loss(pos, quotes_by_symbol: Dict[str, Dict[str, Any
     """Calculate ATR-based adaptive stop loss instead of fixed percentage."""
     adaptive_cfg = logic_config.get("adaptive_stops", {})
     if not adaptive_cfg.get("enabled", False):
-        return float(logic_config.get("stop_loss_pct", 2.0))
+        return _stop_loss_pct_for_config(None)
     
     execution_ticker = str(getattr(pos, "execution_ticker", "") or "").upper()
     underlying = str(getattr(pos, "underlying", "") or "").upper()
@@ -84,10 +84,12 @@ def _calculate_adaptive_stop_loss(pos, quotes_by_symbol: Dict[str, Dict[str, Any
     
     if atr_pct <= 0:
         # Fall back to fixed stop if ATR not available
-        return float(logic_config.get("stop_loss_pct", 2.0))
+        return _stop_loss_pct_for_config(None)
     
     atr_multiplier = float(adaptive_cfg.get("atr_multiplier", 1.5))
-    min_stop = float(adaptive_cfg.get("min_stop_pct", 1.0))
+    # Floor the adaptive stop at the configured minimum (2%) so a
+    # low-ATR name can't get a sub-1% stop that fires on noise.
+    min_stop = max(_min_stop_loss_pct(), float(adaptive_cfg.get("min_stop_pct", 1.0)))
     max_stop = float(adaptive_cfg.get("max_stop_pct", 5.0))
     
     adaptive_stop = atr_pct * atr_multiplier
@@ -421,15 +423,15 @@ def _entry_threshold_for_session(session_status: str, app_config) -> float:
 
 
 def _stop_loss_pct_for_config(app_config) -> float:
-    """Return configured stop-loss percentage."""
+    """Return configured stop-loss percentage, floored at the 2% minimum."""
     try:
         if app_config is not None:
             override = getattr(app_config, "stop_loss_pct", None)
             if override is not None:
-                return max(0.0, float(override))
+                return max(_min_stop_loss_pct(), float(override))
     except Exception:
         pass
-    return max(0.0, float(_L.get("stop_loss_pct", 2.0)))
+    return max(_min_stop_loss_pct(), float(_L.get("stop_loss_pct", 2.0)))
 
 
 def _take_profit_pct_for_config(app_config) -> float:
@@ -456,6 +458,89 @@ def _same_day_exit_edge_blocks_close(open_pos, exit_price: float, now: datetime,
         return False
     pnl_pct = _directional_return_pct(open_pos.signal_type, float(open_pos.entry_price or 0.0), exit_price)
     return pnl_pct > 0 and pnl_pct < threshold_pct
+
+
+def _min_trade_size_usd() -> float:
+    """Configured minimum notional for a new position; below this the entry is skipped."""
+    try:
+        return max(0.0, float(_L.get("min_trade_size_usd", 50.0)))
+    except Exception:
+        return 0.0
+
+
+def _min_stop_loss_pct() -> float:
+    """Configured floor for stop-loss percentages (2.0%)."""
+    try:
+        return max(0.0, float(_L.get("min_stop_loss_pct", 2.0)))
+    except Exception:
+        return 0.0
+
+
+def _flip_should_early_close(conviction_level: str, rec: dict) -> bool:
+    """
+    Whether a direction flip should close the position early.
+
+    Choice B: flips hold by default ("stay the course") and only close early
+    when the NEW signal is HIGH conviction (config early_close_convictions) or
+    when a MEDIUM conviction flip arrives with a strong directional score.
+    """
+    fm = _L.get("flip_management", {}) or {}
+    early = {str(x).upper() for x in fm.get("early_close_convictions", ["HIGH"])}
+    level = str(conviction_level or "").upper()
+    if level in early:
+        return True
+    if level == "MEDIUM":
+        score = float(rec.get("directional_score") or 0.0)
+        threshold = float(fm.get("flip_early_close_med_score", 0.60))
+        if abs(score) >= threshold:
+            return True
+    return False
+
+
+def _apply_flip_hold(open_pos, conviction_level: str, trading_type: str,
+                     holding_minutes: int, now: datetime, logic_config: dict) -> dict:
+    """
+    Refresh a held-through-flip position from the new thesis.
+
+    Keeps the position open, updates its conviction/trading_type to the new
+    signal, refreshes the holding window (capped by
+    flip_hold_max_extension_minutes) and resets the trailing-stop baseline so
+    it reflects the new thesis rather than the old entry.
+    """
+    fcfg = logic_config.get("flip_management", {}) or {}
+    max_ext_min = int(fcfg.get("flip_hold_max_extension_minutes", 240))
+    _cv = logic_config["conviction"]
+
+    _type_rank = {"VOLATILE_EVENT": 0, "SCALP": 1, "SWING": 2, "POSITION": 3}
+    old_rank = _type_rank.get(str(getattr(open_pos, "trading_type", "SWING") or "SWING").upper(), 2)
+    new_rank = _type_rank.get(str(trading_type or "SWING").upper(), 2)
+    _max_mins = _cv.get("max_holding_minutes", {}).get(trading_type, holding_minutes * 3)
+    entered_naive = _safe_utc(getattr(open_pos, "entered_at", None))
+    hard_cap = entered_naive + timedelta(minutes=_max_mins) if entered_naive else None
+    proposed = now + timedelta(minutes=holding_minutes)
+    if new_rank >= old_rank:
+        new_window = min(proposed, hard_cap) if hard_cap else proposed
+    else:
+        cur_win = _safe_utc(getattr(open_pos, "holding_window_until", None))
+        new_window = min(cur_win, proposed) if cur_win else proposed
+
+    # Cap the extension so a position can't run forever on repeated flips.
+    if max_ext_min > 0:
+        cap = now + timedelta(minutes=max_ext_min)
+        new_window = min(new_window, cap)
+
+    open_pos.conviction_level = conviction_level
+    open_pos.trading_type = trading_type
+    open_pos.holding_window_until = new_window
+    # Fresh trailing baseline from the new thesis.
+    open_pos.trailing_stop_price = None
+    open_pos.best_price_seen = None
+
+    return {
+        "reason": "flip_hold_window_refreshed",
+        "holding_window_until": new_window,
+        "held_as": conviction_level,
+    }
 
 
 def _portfolio_cap_for_config(app_config) -> Optional[float]:
@@ -1225,45 +1310,6 @@ def process_signals(
             actions.append(action_summary)
             continue
 
-        # Close existing position — direction flip overrides window when config allows (default: always)
-        is_direction_flip = open_pos is not None and open_pos.signal_type != signal_type
-        window_blocks_close = (
-            open_pos is not None
-            and is_direction_flip
-            and not _cv.get("flip_overrides_window", True)
-            and _window_active(open_pos, now)
-        )
-        if open_pos and existing_pos_price > 0 and not window_blocks_close:
-            # Direction flips always close — thesis has fundamentally changed.
-            # Same-day exit edge only applies to ticker/leverage changes within the same direction.
-            if not is_direction_flip and _same_day_exit_edge_blocks_close(open_pos, existing_pos_price, now, _min_same_day_edge_pct):
-                action_summary["action"] = "held"
-                action_summary["reason"] = "min_same_day_exit_edge"
-                print(f"[paper] {underlying}: held — min same-day exit edge not reached (need {_min_same_day_edge_pct:.1f}%)")
-                action_summary["exit_edge_pct"] = round(
-                    _directional_return_pct(open_pos.signal_type, open_pos.entry_price, existing_pos_price),
-                    4,
-                )
-                action_summary["min_same_day_exit_edge_pct"] = _min_same_day_edge_pct
-                actions.append(action_summary)
-                continue
-            _close_position(
-                open_pos, existing_pos_price, now, db,
-                reason="direction_flip" if is_direction_flip else "ticker_leverage_change",
-            )
-            action_summary["closed_pnl"] = open_pos.realized_pnl
-            action_summary["exit_price"] = existing_pos_price
-            _alpaca_pending.append((open_pos, "close"))
-            if _portfolio_cap is not None:
-                _open_exposure = max(0.0, _open_exposure - float(open_pos.amount or 0))
-        elif window_blocks_close:
-            action_summary["action"] = "held"
-            action_summary["reason"] = "conviction_window_blocks_flip"
-            action_summary["holding_window_until"] = _utc_iso(open_pos.holding_window_until)
-            print(f"[paper] {underlying} {signal_type}: held — conviction window blocks direction flip until {_utc_iso(open_pos.holding_window_until)}")
-            actions.append(action_summary)
-            continue
-
         # Re-entry cooldown: skip same-direction re-entry if too soon after a close
         if entry_price > 0 and _reentry_cooldown > 0:
             _recent = (
@@ -1290,7 +1336,9 @@ def process_signals(
         # should be cut (or winner taken) regardless of what the sentiment model
         # currently says.  Previously the guard `signal_type == open_pos.signal_type`
         # meant that when sentiment flipped (e.g. LONG→SHORT) the stop-loss was
-        # never re-checked, allowing losses to compound.
+        # never re-checked, allowing losses to compound.  Running this BEFORE
+        # flip handling means a held-through-flip position is still protected by
+        # its stop-loss / take-profit.
         if open_pos is not None and existing_pos_price > 0:
             # Use adaptive stop loss if enabled, otherwise use fixed
             _adaptive_cfg = _L.get("adaptive_stops", {})
@@ -1322,6 +1370,70 @@ def process_signals(
                     actions.append(action_summary)
                     continue
 
+        # ── Direction flip / ticker-leverage change ──
+        # Flip management (Choice B): a LOW/MEDIUM conviction flip HOLDS the
+        # position ("stay the course") instead of churning out at sub-dollar
+        # P&L.  Only a HIGH conviction flip (or a strong-score MEDIUM flip)
+        # closes early and opens the opposite side.  Same-direction
+        # ticker/leverage changes stay gated by the same-day exit edge.
+        # Stop-loss / take-profit above always take precedence.
+        is_direction_flip = open_pos is not None and open_pos.signal_type != signal_type
+        _flip_early_close = is_direction_flip and _flip_should_early_close(conviction_level, rec)
+        window_blocks_close = (
+            open_pos is not None
+            and is_direction_flip
+            and not _flip_early_close
+            and not _cv.get("flip_overrides_window", True)
+            and _window_active(open_pos, now)
+        )
+        if open_pos and existing_pos_price > 0 and not window_blocks_close:
+            if is_direction_flip and not _flip_early_close:
+                # Hold through a LOW/MEDIUM flip — stay the course. Refresh the
+                # holding window from the new thesis (capped) and reset the
+                # trailing baseline; do NOT open the opposite position.
+                _fh_res = _apply_flip_hold(open_pos, conviction_level, trading_type, holding_minutes, now, _L)
+                action_summary["action"] = "held"
+                action_summary["reason"] = _fh_res["reason"]
+                action_summary["holding_window_until"] = _utc_iso(_fh_res["holding_window_until"])
+                action_summary["flip_held_as"] = _fh_res["held_as"]
+                print(
+                    f"[paper] {underlying}: held through {_prev_signal_type}→{signal_type} flip "
+                    f"({conviction_level}) — refreshed window to {_utc_iso(_fh_res['holding_window_until'])}"
+                )
+                actions.append(action_summary)
+                continue
+
+            # Direction flips close — thesis has fundamentally changed.
+            # Same-day exit edge only applies to ticker/leverage changes within the same direction.
+            if not is_direction_flip and _same_day_exit_edge_blocks_close(open_pos, existing_pos_price, now, _min_same_day_edge_pct):
+                action_summary["action"] = "held"
+                action_summary["reason"] = "min_same_day_exit_edge"
+                print(f"[paper] {underlying}: held — min same-day exit edge not reached (need {_min_same_day_edge_pct:.1f}%)")
+                action_summary["exit_edge_pct"] = round(
+                    _directional_return_pct(open_pos.signal_type, open_pos.entry_price, existing_pos_price),
+                    4,
+                )
+                action_summary["min_same_day_exit_edge_pct"] = _min_same_day_edge_pct
+                actions.append(action_summary)
+                continue
+            _close_position(
+                open_pos, existing_pos_price, now, db,
+                reason="direction_flip" if is_direction_flip else "ticker_leverage_change",
+            )
+            action_summary["closed_pnl"] = open_pos.realized_pnl
+            action_summary["exit_price"] = existing_pos_price
+            action_summary["flip_early_closed"] = bool(is_direction_flip)
+            _alpaca_pending.append((open_pos, "close"))
+            if _portfolio_cap is not None:
+                _open_exposure = max(0.0, _open_exposure - float(open_pos.amount or 0))
+        elif window_blocks_close:
+            action_summary["action"] = "held"
+            action_summary["reason"] = "conviction_window_blocks_flip"
+            action_summary["holding_window_until"] = _utc_iso(open_pos.holding_window_until)
+            print(f"[paper] {underlying} {signal_type}: held — conviction window blocks direction flip until {_utc_iso(open_pos.holding_window_until)}")
+            actions.append(action_summary)
+            continue
+
         # ── Entry threshold gate ──
         # (directional signals only — HOLD signals skip this)
         # We gate on conviction_level: only HIGH conviction gets an automatic pass.
@@ -1346,7 +1458,7 @@ def process_signals(
         # entry.  Only apply ramp_cap when we are adding to an existing
         # position (handled in the accumulation block below).
         _MIN_INITIAL_ENTRY_PCT = 0.25
-        _min_initial = _base_amount * _MIN_INITIAL_ENTRY_PCT
+        _min_initial = max(_base_amount * _MIN_INITIAL_ENTRY_PCT, _min_trade_size_usd())
         _amount = max(_amount, _min_initial)
 
         # ── Ramp stage tracking (stored for accumulation logic) ──────
@@ -1363,6 +1475,17 @@ def process_signals(
                 actions.append(action_summary)
                 continue
             _amount = min(_amount, _remaining)
+
+            # A trade that can't reach the minimum size after the portfolio
+            # cap isn't worth the fees/churn — skip it.
+            _min_size = _min_trade_size_usd()
+            if _min_size > 0 and _amount < _min_size:
+                action_summary["action"] = "skipped"
+                action_summary["reason"] = "min_trade_size"
+                action_summary["min_trade_size_usd"] = round(_min_size, 2)
+                print(f"[paper] {underlying} {signal_type}: skipped — ${_amount:.2f} below min trade size ${_min_size:.2f}")
+                actions.append(action_summary)
+                continue
 
         if entry_price > 0:
             window_until = datetime.now(timezone.utc) + timedelta(minutes=holding_minutes)

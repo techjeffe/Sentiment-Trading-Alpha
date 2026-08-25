@@ -775,10 +775,19 @@ class SentimentEngine:
 
     @staticmethod
     def compute_red_team_stop_loss(adjusted_urgency: str) -> float:
-        """Rule-based stop loss from urgency — removes the LLM float guess."""
-        return _L["red_team"]["stop_loss_by_urgency"].get(
+        """Rule-based stop loss from urgency — removes the LLM float guess.
+
+        Floored at the min_stop_loss_pct (2%) so no signal can ever
+        recommend a sub-2% stop.
+        """
+        raw = _L["red_team"]["stop_loss_by_urgency"].get(
             str(adjusted_urgency).upper(), 2.5
         )
+        try:
+            floor = float(_L.get("min_stop_loss_pct", 2.0))
+        except (TypeError, ValueError):
+            floor = 2.0
+        return max(floor, float(raw))
 
     @staticmethod
     def red_team_override_is_material(

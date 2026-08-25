@@ -44,6 +44,14 @@
   "min_same_day_exit_edge_pct": 0.5,
   "stop_loss_pct": 2.0,
   "take_profit_pct": 3.0,
+  "min_trade_size_usd": 50.0,
+  "min_stop_loss_pct": 2.0,
+  "flip_management": {
+    "_comment": "Direction-flip handling. A LOW/MEDIUM conviction flip holds the position (stay the course) instead of churning out at sub-dollar P&L; only a HIGH conviction flip (or a strong-score MEDIUM flip) closes early and opens the opposite side. flip_hold_max_extension_minutes caps how far a held-through-flip window can be refreshed so a position can't run forever on repeated flips.",
+    "early_close_convictions": ["HIGH"],
+    "flip_early_close_med_score": 0.60,
+    "flip_hold_max_extension_minutes": 240
+  },
   "tiered_profit_scaling": {
     "_comment": "Scale out of positions at multiple profit levels instead of all-at-once. Remaining position converts to tight trailing stop.",
     "enabled": true,
