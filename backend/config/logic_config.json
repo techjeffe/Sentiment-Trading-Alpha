@@ -279,6 +279,14 @@
     "max_filing_chars_for_llm": 40000,
     "lookback_days_on_first_poll": 7
   },
+  "sec_insider": {
+    "_comment": "Materiality filter for SEC insider (OpenInsider) signals. Only purchases that are material pass into discovery so small insider buys don't inflate scores.",
+    "enabled": true,
+    "min_purchase_value": 100000,
+    "require_c_suite_or_director": true,
+    "lookback_days": 7,
+    "max_signals": 100
+  },
   "data_retention": {
     "_comment": "How long to keep diferent data types in the database.",
     "scraped_articles_days": 30,

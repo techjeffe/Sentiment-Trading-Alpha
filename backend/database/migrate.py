@@ -413,6 +413,32 @@ def migrate():
             conn.commit()
             print("sec_filings table created.")
 
+        # ── insider_signals table ──────────────────────────────────────────
+        if "insider_signals" not in tables:
+            print("Creating insider_signals table...")
+            conn.execute(text("""
+                CREATE TABLE insider_signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol VARCHAR(10) NOT NULL,
+                    company_name VARCHAR(255),
+                    insider_name VARCHAR(128) NOT NULL,
+                    insider_title VARCHAR(128),
+                    trade_type VARCHAR(8) NOT NULL DEFAULT 'P',
+                    price REAL,
+                    qty INTEGER,
+                    value REAL,
+                    filing_date VARCHAR(12),
+                    trade_date VARCHAR(12),
+                    url TEXT,
+                    source_link TEXT,
+                    unique_key VARCHAR(255) NOT NULL UNIQUE,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_insider_signals_symbol_date ON insider_signals (symbol, trade_date)"))
+            conn.commit()
+            print("insider_signals table created.")
+
     # ── Decision Log tables ──────────────────────────────────────────────
     # Created via metadata.create_all on the decision_log engine during
     # backend startup.  Column additions still need explicit ALTER TABLE

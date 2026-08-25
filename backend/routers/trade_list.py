@@ -17,7 +17,7 @@ backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
 from database.engine import SessionLocal
-from database.models import TradingOpportunity, ScrapedArticle, SecFiling
+from database.models import TradingOpportunity, ScrapedArticle, SecFiling, InsiderSignal
 
 router = APIRouter(prefix="/trade-list", tags=["trade-list"])
 
@@ -31,7 +31,7 @@ SOURCE_METADATA = {
     },
     "SEC_INSIDER": {
         "label": "SEC Insider Trading",
-        "description": "Open-market stock purchases by C-suite executives and directors (Form 4).",
+        "description": "Material open-market stock purchases by C-suite executives and directors (Form 4), sourced from OpenInsider.",
     },
     "SEC_FILING": {
         "label": "SEC Filings",
@@ -258,7 +258,7 @@ async def get_opportunity_sources(opportunity_id: int):
 
         # Reconstruct SEC items: recent SEC filings for the symbol.
         sec_items: List[dict] = []
-        if "SEC_INSIDER" in source_names or "SEC_FILING" in source_names:
+        if "SEC_FILING" in source_names:
             filings = db.query(SecFiling).filter(
                 SecFiling.symbol == symbol
             ).order_by(SecFiling.filing_date.desc()).limit(20).all()
@@ -272,14 +272,37 @@ async def get_opportunity_sources(opportunity_id: int):
                     "form_type": f.form_type,
                 })
 
+        # Reconstruct SEC_INSIDER items: persisted insider (OpenInsider) buys.
+        insider_items: List[dict] = []
+        if "SEC_INSIDER" in source_names:
+            signals = db.query(InsiderSignal).filter(
+                InsiderSignal.symbol == symbol
+            ).order_by(InsiderSignal.trade_date.desc()).limit(20).all()
+            for s in signals:
+                value_str = f"${s.value:,.0f}" if s.value is not None else "n/a"
+                qty_str = f"{s.qty:,}" if s.qty is not None else "n/a"
+                price_str = f"${s.price:.2f}" if s.price is not None else "n/a"
+                summary = f"{s.insider_title or 'Insider'} purchased {qty_str} shares at {price_str} ({value_str} total)"
+                if s.trade_date:
+                    summary += f" on {s.trade_date}"
+                insider_items.append({
+                    "title": f"Insider Purchase: {s.insider_name} ({s.insider_title})",
+                    "url": s.source_link or s.url,
+                    "published_at": s.filing_date or s.trade_date,
+                    "source_label": "SEC Insider (OpenInsider)",
+                    "summary": summary,
+                    "insider_name": s.insider_name,
+                    "value": s.value,
+                })
+
         sources_out: List[dict] = []
         for name in source_names:
             meta = _source_meta(name)
             if name == "NEWS":
                 items = news_items
             elif name == "SEC_INSIDER":
-                # Prefer Form 4 (insider trading) filings; fall back to all filings.
-                items = [it for it in sec_items if it.get("form_type") == "4"] or sec_items
+                # Stored insider buys (fetch from OpenInsider at discovery time).
+                items = insider_items
             elif name == "SEC_FILING":
                 items = sec_items
             else:

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_
 
 from database.engine import get_db
-from database.models import SecFiling, ScrapedArticle, Post
+from database.models import SecFiling, ScrapedArticle, Post, InsiderSignal
 
 router = APIRouter(tags=["news"])  # prefix added in main.py during include_router
 
@@ -209,9 +209,75 @@ async def get_unified_news(
                 })
         except Exception as exc:
             logger.warning(f"Truth Social posts table not available: {exc}")
+
+    # Query 4: SEC Insider Signals (persisted from discovery's OpenInsider fetch)
+    # Shown when a symbol is filtered, or when the user explicitly picks the
+    # "insider" source. Insider rows are keyed by symbol, so a bare
+    # (non-symbol) view only surfaces them via the explicit source filter.
+    if (symbol and not source) or source == "insider":
+        try:
+            insider_q = db.query(InsiderSignal)
+            if symbol:
+                insider_q = insider_q.filter(InsiderSignal.symbol == symbol.upper())
+            insider_q = insider_q.order_by(InsiderSignal.trade_date.desc()).limit(200)
+
+            def _parse_insider_date(text: Optional[str]):
+                if not text:
+                    return None
+                try:
+                    # Naive UTC datetime to match how SQLite returns other item timestamps.
+                    return datetime.strptime(text[:10], "%Y-%m-%d")
+                except (ValueError, TypeError):
+                    return None
+
+            for sig in insider_q.all():
+                pub = _parse_insider_date(sig.trade_date) or _parse_insider_date(sig.filing_date)
+                # Naive comparisons: SQLite returns naive datetimes; date_filter is
+                # parsed as UTC-aware above, so strip tzinfo for direct comparison.
+                start = date_filter.get("start")
+                end = date_filter.get("end")
+                if start is not None:
+                    start = start.replace(tzinfo=None)
+                if end is not None:
+                    end = end.replace(tzinfo=None)
+                if start and (pub or datetime.min) < start:
+                    continue
+                if end and (pub or datetime.max) >= end:
+                    continue
+
+                value_str = f"${sig.value:,.0f}" if sig.value is not None else "n/a"
+                qty_str = f"{sig.qty:,}" if sig.qty is not None else "n/a"
+                price_str = f"${sig.price:.2f}" if sig.price is not None else "n/a"
+                summary = f"{sig.insider_title or 'Insider'} purchased {qty_str} shares at {price_str} ({value_str} total)"
+                if sig.trade_date:
+                    summary += f" on {sig.trade_date}"
+
+                all_items.append({
+                    "id": f"insider_{sig.id}",
+                    "source": "insider",
+                    "source_label": "SEC Insider (OpenInsider)",
+                    "symbol": sig.symbol,
+                    "title": f"Insider Purchase: {sig.insider_name} ({sig.insider_title})",
+                    "summary": summary,
+                    "published_at": pub,
+                    "url": sig.source_link or sig.url,
+                    "processed": True,
+                    "details": {
+                        "insider_name": sig.insider_name,
+                        "insider_title": sig.insider_title,
+                        "company_name": sig.company_name,
+                        "value": sig.value,
+                        "qty": sig.qty,
+                        "price": sig.price,
+                        "trade_date": sig.trade_date,
+                        "filing_date": sig.filing_date,
+                    }
+                })
+        except Exception as exc:
+            logger.warning(f"Insider signals table not available: {exc}")
     
     # Sort by published_at (newest first)
-    all_items.sort(key=lambda x: x["published_at"] if x["published_at"] else datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    all_items.sort(key=lambda x: x["published_at"] if x["published_at"] else datetime.min, reverse=True)
     
     # Pagination
     total = len(all_items)

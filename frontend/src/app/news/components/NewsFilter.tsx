@@ -23,6 +23,7 @@ export function NewsFilter({ symbol, startDate, endDate, source, onFilterChange 
     { value: "edgar", label: "SEC EDGAR" },
     { value: "rss", label: "RSS Feeds" },
     { value: "truth_social", label: "Truth Social" },
+    { value: "insider", label: "SEC Insider (OpenInsider)" },
   ];
 
   const handleChange = (key: string, value: string) => {

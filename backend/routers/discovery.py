@@ -16,7 +16,6 @@ backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
 from services.data_ingestion.ticker_extractor import extract_tickers_from_article
-from services.data_ingestion.sec_insider_client import fetch_sec_insider_signals
 from services.analysis.signal_aggregator import aggregate_signals
 from services.risk.pump_dump_detector import check_pnd_flags
 from services.scoring.advanced_scorer import AggregatedSignal
@@ -125,8 +124,11 @@ async def discover_opportunities(
                         all_signals.append(signal)
             
             # Step 3: Fetch SEC insider signals (Phase 2)
+            # Also persists material insider buys so the news page and source
+            # modal can surface the SEC source/link after the fact.
             try:
-                sec_signals = fetch_sec_insider_signals()
+                from services.data_ingestion.sec_insider_client import store_sec_insider_signals
+                sec_signals = store_sec_insider_signals(db=db)
                 all_signals.extend(sec_signals)
             except Exception as e:
                 print(f"SEC insider fetch error: {e}")

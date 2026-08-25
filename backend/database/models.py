@@ -816,3 +816,36 @@ class TradingOpportunity(Base):
     __table_args__ = (
         UniqueConstraint('symbol', 'status', name='uq_symbol_status'),
     )
+
+
+class InsiderSignal(Base):
+    """
+    Persisted SEC insider (OpenInsider) purchases.
+
+    Discovery runs store every material insider buy here so the news page
+    and the trade-list source modal can surface the actual SEC source/link
+    after the fact — even for symbols that have since fallen out of
+    OpenInsider's rolling window. Rows are deduplicated via unique_key
+    (symbol + insider + trade date + qty + price).
+    """
+    __tablename__ = "insider_signals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    company_name = Column(String(255), nullable=True)
+    insider_name = Column(String(128), nullable=False)
+    insider_title = Column(String(128), nullable=True)
+    trade_type = Column(String(8), nullable=False, default="P")
+    price = Column(Float, nullable=True)
+    qty = Column(Integer, nullable=True)
+    value = Column(Float, nullable=True)
+    filing_date = Column(String(12), nullable=True)
+    trade_date = Column(String(12), nullable=True)
+    url = Column(Text, nullable=True)
+    source_link = Column(Text, nullable=True)
+    unique_key = Column(String(255), nullable=False, unique=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_insider_signals_symbol_date", "symbol", "trade_date"),
+    )
