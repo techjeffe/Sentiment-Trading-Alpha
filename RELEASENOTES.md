@@ -1,4 +1,22 @@
-# Release Notes — 2026-07-28
+# Release Notes — 2026-08-25
+
+## 📈 Trade List & News: Symbol-Filtered News, Source Details, Insider Materiality, Trade Churn Reduction
+
+### What Changed
+- **"View News" now filters to the clicked symbol.** The News page reads `?symbol=` from the URL (wrapped in Suspense); the news API filters RSS articles and Truth Social posts by symbol via ticker extraction over a recent ~3,000-article window, and EDGAR filings by column. `NewsFilter` always includes the looked-up symbol in the dropdown.
+- **Source detail modal.** The source count on a trade-list row (e.g. "1 source") is now clickable and opens a modal showing, per source, its label, description, scoring weight, and the actual evidence items. Backed by new `GET /api/v1/trade-list/{id}/sources`. NEWS evidence is anchored to `opportunity.added_at` so it reflects the article set at discovery time; the source (e.g. Truth Social) predicate is applied before the window limit so views aren't wrongly empty.
+- **Material + visible SEC insider buys.** `sec_insider` config in `logic_config.json` makes insider materiality config-driven (`min_purchase_value` $100K, C-suite/director required, lookback, max_signals). Every discovery run now persists material OpenInsider buys to a new `insider_signals` table (dedup by unique_key), so the SEC source/link stays visible after OpenInsider's rolling window moves. News page surfaces them (incl. `source=insider` filter).
+- **Stop churning sub-dollar trades (Choice B).** `min_trade_size_usd` ($50) floors entries so wins/losses are at least ~$1 (skipped if the portfolio cap can't fit); `min_stop_loss_pct` (2%) floors the fixed, adaptive, and urgency stops; `flip_management` makes LOW/MEDIUM conviction flips hold the position (stay the course, window refreshed capped at 240 min, trailing baseline reset) while HIGH / strong-MEDIUM flips still close early and flip. Stop-loss/take-profit are now evaluated before flip handling.
+
+### Testing
+- Backend unit/integration suites pass (`test_flip_management.py`, `test_news_symbol_filter.py`, paper-trading, sentiment, analysis).
+- `npm run build` clean; `/news`, `/trade-list`, `/trading` prerender.
+
+### Files Changed
+- `frontend/src/app/news/page.tsx`, `news/components/NewsFilter.tsx`, `news/components/NewsList.tsx`, `trade-list/page.tsx`, `trade-list/components/SourceDetailModal.tsx`, `trading/page.tsx`
+- `backend/routers/news.py`, `trade_list.py`, `discovery.py`; `services/data_ingestion/sec_insider_client.py`, `services/paper_trading.py`, `services/sentiment/engine.py`; `config/logic_config.json`; `database/models.py`, `database/migrate.py`; new tests `backend/tests/test_flip_management.py`, `test_news_symbol_filter.py`
+
+---
 
 ## 🔧 Discovery "Discover New" Button + Auto-Add Reliability
 
