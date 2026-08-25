@@ -18,16 +18,21 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_
 
 from database.engine import get_db
-from database.models import SecFiling, ScrapedArticle, Post
+from database.models import SecFiling, ScrapedArticle, Post, InsiderSignal
 
 router = APIRouter(tags=["news"])  # prefix added in main.py during include_router
 
 logger = logging.getLogger(__name__)
 
+# When filtering RSS articles by symbol, scan the most recent N articles
+# (RSS rows have no direct symbol column; ticker extraction mirrors discovery).
+# 3000 recent articles spans roughly a month of ingestion.
+SYMBOL_FILTER_ARTICLE_WINDOW = 3000
+
 
 @router.get("")
 async def get_unified_news(
-    symbol: Optional[str] = Query(None, description="Filter by symbol (EDGAR only)"),
+    symbol: Optional[str] = Query(None, description="Filter by symbol (EDGAR filings by column; RSS articles/posts by ticker extraction)"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     source: Optional[str] = Query(None, description="Filter by source: edgar, rss, truth_social"),
@@ -112,8 +117,44 @@ async def get_unified_news(
         if date_filter.get("end"):
             articles_query = articles_query.filter(ScrapedArticle.published_at < date_filter["end"])
         
+        # RSS articles have no direct symbol column. When a symbol filter is
+        # requested, match it by re-running ticker extraction over a bounded
+        # window of the most recent articles (mirrors the discovery pipeline).
+        if symbol:
+            from services.data_ingestion.ticker_extractor import extract_tickers_from_article
+            sym = symbol.upper()
+            
+            window_q = db.query(ScrapedArticle)
+            
+            # Apply the source predicate to the query BEFORE the window limit,
+            # otherwise the candidate set is trimmed to the newest N global rows
+            # first and matching rows of a narrower source (e.g. Truth Social)
+            # that fall outside that window get discarded before ticker
+            # extraction — producing a false "no matches" for that source.
+            if source == "truth_social":
+                window_q = window_q.filter(ScrapedArticle.source.ilike("%truth%"))
+            
+            if date_filter.get("start"):
+                window_q = window_q.filter(ScrapedArticle.published_at >= date_filter["start"])
+            
+            if date_filter.get("end"):
+                window_q = window_q.filter(ScrapedArticle.published_at < date_filter["end"])
+            
+            window_q = window_q.order_by(
+                ScrapedArticle.discovered_at.desc()
+            ).limit(SYMBOL_FILTER_ARTICLE_WINDOW)
+            
+            window = window_q.all()
+            
+            article_rows = [
+                a for a in window
+                if sym in extract_tickers_from_article(a.title or "", a.full_content or a.summary or "")
+            ]
+        else:
+            article_rows = articles_query.all()
+        
         # Convert to unified format
-        for a in articles_query.all():
+        for a in article_rows:
             # Determine if this is Truth Social based on source
             is_truth_social = "truth" in (a.source or "").lower()
             
@@ -151,6 +192,11 @@ async def get_unified_news(
             
             # Convert to unified format
             for p in posts_query.all():
+                # When filtering by symbol, match the post content via ticker extraction
+                if symbol:
+                    from services.data_ingestion.ticker_extractor import extract_tickers
+                    if symbol.upper() not in extract_tickers(p.content or ""):
+                        continue
                 all_items.append({
                     "id": f"truth_{p.id}",
                     "source": "truth_social",
@@ -168,9 +214,75 @@ async def get_unified_news(
                 })
         except Exception as exc:
             logger.warning(f"Truth Social posts table not available: {exc}")
+
+    # Query 4: SEC Insider Signals (persisted from discovery's OpenInsider fetch)
+    # Shown when a symbol is filtered, or when the user explicitly picks the
+    # "insider" source. Insider rows are keyed by symbol, so a bare
+    # (non-symbol) view only surfaces them via the explicit source filter.
+    if (symbol and not source) or source == "insider":
+        try:
+            insider_q = db.query(InsiderSignal)
+            if symbol:
+                insider_q = insider_q.filter(InsiderSignal.symbol == symbol.upper())
+            insider_q = insider_q.order_by(InsiderSignal.trade_date.desc()).limit(200)
+
+            def _parse_insider_date(text: Optional[str]):
+                if not text:
+                    return None
+                try:
+                    # Naive UTC datetime to match how SQLite returns other item timestamps.
+                    return datetime.strptime(text[:10], "%Y-%m-%d")
+                except (ValueError, TypeError):
+                    return None
+
+            for sig in insider_q.all():
+                pub = _parse_insider_date(sig.trade_date) or _parse_insider_date(sig.filing_date)
+                # Naive comparisons: SQLite returns naive datetimes; date_filter is
+                # parsed as UTC-aware above, so strip tzinfo for direct comparison.
+                start = date_filter.get("start")
+                end = date_filter.get("end")
+                if start is not None:
+                    start = start.replace(tzinfo=None)
+                if end is not None:
+                    end = end.replace(tzinfo=None)
+                if start and (pub or datetime.min) < start:
+                    continue
+                if end and (pub or datetime.max) >= end:
+                    continue
+
+                value_str = f"${sig.value:,.0f}" if sig.value is not None else "n/a"
+                qty_str = f"{sig.qty:,}" if sig.qty is not None else "n/a"
+                price_str = f"${sig.price:.2f}" if sig.price is not None else "n/a"
+                summary = f"{sig.insider_title or 'Insider'} purchased {qty_str} shares at {price_str} ({value_str} total)"
+                if sig.trade_date:
+                    summary += f" on {sig.trade_date}"
+
+                all_items.append({
+                    "id": f"insider_{sig.id}",
+                    "source": "insider",
+                    "source_label": "SEC Insider (OpenInsider)",
+                    "symbol": sig.symbol,
+                    "title": f"Insider Purchase: {sig.insider_name} ({sig.insider_title})",
+                    "summary": summary,
+                    "published_at": pub,
+                    "url": sig.source_link or sig.url,
+                    "processed": True,
+                    "details": {
+                        "insider_name": sig.insider_name,
+                        "insider_title": sig.insider_title,
+                        "company_name": sig.company_name,
+                        "value": sig.value,
+                        "qty": sig.qty,
+                        "price": sig.price,
+                        "trade_date": sig.trade_date,
+                        "filing_date": sig.filing_date,
+                    }
+                })
+        except Exception as exc:
+            logger.warning(f"Insider signals table not available: {exc}")
     
     # Sort by published_at (newest first)
-    all_items.sort(key=lambda x: x["published_at"] if x["published_at"] else datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    all_items.sort(key=lambda x: x["published_at"] if x["published_at"] else datetime.min, reverse=True)
     
     # Pagination
     total = len(all_items)

@@ -11,12 +11,19 @@ interface NewsFilterProps {
 }
 
 export function NewsFilter({ symbol, startDate, endDate, source, onFilterChange }: NewsFilterProps) {
-  const symbols = ["", "NVDA", "ORCL", "MSFT", "AVGO", "MU", "NET", "NOW", "SPCX"];
+  const baseSymbols = ["NVDA", "ORCL", "MSFT", "AVGO", "MU", "NET", "NOW", "SPCX"];
+  // Ensure the currently-selected symbol (e.g., passed via ?symbol= from the
+  // Trade List "View News" link) is always an option, even if it's not in the
+  // default tracked list.
+  const symbols = symbol && !baseSymbols.includes(symbol)
+    ? [symbol, ...baseSymbols]
+    : baseSymbols;
   const sources = [
     { value: "", label: "All Sources" },
     { value: "edgar", label: "SEC EDGAR" },
     { value: "rss", label: "RSS Feeds" },
     { value: "truth_social", label: "Truth Social" },
+    { value: "insider", label: "SEC Insider (OpenInsider)" },
   ];
 
   const handleChange = (key: string, value: string) => {

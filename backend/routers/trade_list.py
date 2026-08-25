@@ -8,6 +8,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query, Body
 from pydantic import BaseModel
 from datetime import datetime
+import json
 import sys
 from pathlib import Path
 
@@ -16,9 +17,84 @@ backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
 from database.engine import SessionLocal
-from database.models import TradingOpportunity
+from database.models import TradingOpportunity, ScrapedArticle, SecFiling, InsiderSignal
 
 router = APIRouter(prefix="/trade-list", tags=["trade-list"])
+
+
+# Human-readable metadata for each signal source type. Used by the
+# "Sources" detail modal so users understand what contributed to a score.
+SOURCE_METADATA = {
+    "NEWS": {
+        "label": "News Articles",
+        "description": "Scraped news articles (RSS feeds) that mention this symbol.",
+    },
+    "SEC_INSIDER": {
+        "label": "SEC Insider Trading",
+        "description": "Material open-market stock purchases by C-suite executives and directors (Form 4), sourced from OpenInsider.",
+    },
+    "SEC_FILING": {
+        "label": "SEC Filings",
+        "description": "Official SEC EDGAR filings (10-K, 10-Q, 8-K, etc.).",
+    },
+    "REDDIT": {
+        "label": "Reddit",
+        "description": "Posts from financial subreddits (e.g., r/wallstreetbets).",
+    },
+    "TWITTER": {
+        "label": "Twitter / X",
+        "description": "Posts from Twitter / X.",
+    },
+    "STOCKTWITS": {
+        "label": "StockTwits",
+        "description": "Posts from StockTwits.",
+    },
+    "OPTIONS_FLOW": {
+        "label": "Options Flow",
+        "description": "Unusual options activity (net premium, call/put ratio).",
+    },
+    "VOLUME_SPIKE": {
+        "label": "Volume Spike",
+        "description": "Abnormal trading volume relative to the recent average.",
+    },
+    "CONGRESS": {
+        "label": "Congressional Trading",
+        "description": "Disclosed trades by members of Congress.",
+    },
+    "POLYMARKET": {
+        "label": "Polymarket",
+        "description": "Prediction-market odds.",
+    },
+}
+
+
+def _source_meta(name: str) -> dict:
+    """Build the metadata dict (label/description/weight) for a source name."""
+    from services.analysis.signal_aggregator import SOURCE_WEIGHTS
+    meta = SOURCE_METADATA.get(name, {
+        "label": name.replace("_", " ").title(),
+        "description": "Signal source.",
+    })
+    return {
+        "name": name,
+        "label": meta["label"],
+        "description": meta["description"],
+        "weight": SOURCE_WEIGHTS.get(name, 1),
+    }
+
+
+def _coerce_sources(raw) -> List[str]:
+    """Defensively coerce the stored `sources` JSON field into a list of strings."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return [raw] if raw else []
+    if isinstance(raw, (list, tuple)):
+        return [str(s) for s in raw if s]
+    return []
 
 
 class AddToTradeListRequest(BaseModel):
@@ -133,6 +209,134 @@ async def get_trade_list(
         
     finally:
         db.close()
+
+
+@router.get("/{opportunity_id}/sources")
+async def get_opportunity_sources(opportunity_id: int, db=None):
+    """
+    Get a detailed per-source breakdown for a trading opportunity.
+
+    For each source that contributed to this opportunity, returns:
+    - A human-readable label, description, and scoring weight
+    - The actual items (articles / filings) that contributed, reconstructed
+      from the database where possible
+
+    This powers the "Sources" detail modal on the trade-list page.
+
+    db is optional and injected for testability; when omitted a session is
+    created for the duration of the call.
+    """
+    own_session = db is None
+    if db is None:
+        db = SessionLocal()
+    try:
+        opportunity = db.query(TradingOpportunity).filter(
+            TradingOpportunity.id == opportunity_id
+        ).first()
+
+        if not opportunity:
+            raise HTTPException(status_code=404, detail="Opportunity not found")
+
+        symbol = (opportunity.symbol or "").upper()
+        source_names = _coerce_sources(opportunity.sources)
+
+        # Reconstruct NEWS items: articles that mention the symbol and were
+        # present when this opportunity was discovered.  Mirroring the discovery
+        # pipeline (newest 100 at discovery time), we anchor the window to
+        # opportunity.added_at instead of the *current* newest rows — otherwise a
+        # NEWS-backed entry opened more than 100 articles ago would report 0
+        # evidence for a score that still says NEWS contributed.
+        news_items: List[dict] = []
+        if "NEWS" in source_names:
+            from services.data_ingestion.ticker_extractor import extract_tickers_from_article
+            # >= allows for the server_default=func.now() timestamp jitter and a
+            # row that lands in the same instant the opportunity was created.
+            cutoff = opportunity.added_at
+            q = db.query(ScrapedArticle)
+            if cutoff is not None:
+                q = q.filter(ScrapedArticle.discovered_at <= cutoff)
+            articles = q.order_by(
+                ScrapedArticle.discovered_at.desc()
+            ).limit(100).all()
+            for a in articles:
+                title = a.title or ""
+                content = a.full_content or a.summary or ""
+                tickers = extract_tickers_from_article(title, content)
+                if symbol in tickers:
+                    news_items.append({
+                        "title": title,
+                        "url": a.url,
+                        "published_at": a.published_at.isoformat() if a.published_at else None,
+                        "source_label": a.source or "RSS",
+                        "summary": (a.summary or "")[:300],
+                    })
+
+        # Reconstruct SEC items: recent SEC filings for the symbol.
+        sec_items: List[dict] = []
+        if "SEC_FILING" in source_names:
+            filings = db.query(SecFiling).filter(
+                SecFiling.symbol == symbol
+            ).order_by(SecFiling.filing_date.desc()).limit(20).all()
+            for f in filings:
+                sec_items.append({
+                    "title": f"{f.form_type} filing ({f.filing_date.strftime('%Y-%m-%d') if f.filing_date else 'N/A'})",
+                    "url": f.primary_document_url,
+                    "published_at": f.filing_date.isoformat() if f.filing_date else None,
+                    "source_label": "SEC EDGAR",
+                    "summary": (f.llm_summary or "")[:300],
+                    "form_type": f.form_type,
+                })
+
+        # Reconstruct SEC_INSIDER items: persisted insider (OpenInsider) buys.
+        insider_items: List[dict] = []
+        if "SEC_INSIDER" in source_names:
+            signals = db.query(InsiderSignal).filter(
+                InsiderSignal.symbol == symbol
+            ).order_by(InsiderSignal.trade_date.desc()).limit(20).all()
+            for s in signals:
+                value_str = f"${s.value:,.0f}" if s.value is not None else "n/a"
+                qty_str = f"{s.qty:,}" if s.qty is not None else "n/a"
+                price_str = f"${s.price:.2f}" if s.price is not None else "n/a"
+                summary = f"{s.insider_title or 'Insider'} purchased {qty_str} shares at {price_str} ({value_str} total)"
+                if s.trade_date:
+                    summary += f" on {s.trade_date}"
+                insider_items.append({
+                    "title": f"Insider Purchase: {s.insider_name} ({s.insider_title})",
+                    "url": s.source_link or s.url,
+                    "published_at": s.filing_date or s.trade_date,
+                    "source_label": "SEC Insider (OpenInsider)",
+                    "summary": summary,
+                    "insider_name": s.insider_name,
+                    "value": s.value,
+                })
+
+        sources_out: List[dict] = []
+        for name in source_names:
+            meta = _source_meta(name)
+            if name == "NEWS":
+                items = news_items
+            elif name == "SEC_INSIDER":
+                # Stored insider buys (fetch from OpenInsider at discovery time).
+                items = insider_items
+            elif name == "SEC_FILING":
+                items = sec_items
+            else:
+                items = []
+            meta["items_found"] = len(items)
+            meta["items"] = items[:10]
+            sources_out.append(meta)
+
+        return {
+            "symbol": symbol,
+            "score": opportunity.score,
+            "source_count": opportunity.source_count,
+            "signal_count": opportunity.signal_count,
+            "sources": sources_out,
+        }
+
+    finally:
+        if own_session:
+            db.close()
 
 
 @router.delete("/{opportunity_id}")

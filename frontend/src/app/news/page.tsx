@@ -1,19 +1,29 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { NewsFilter } from "./components/NewsFilter";
 import { NewsList } from "./components/NewsList";
 import { NewsDetail } from "./components/NewsDetail";
 import Link from "next/link";
 
 export default function NewsPage() {
+  return (
+    <Suspense fallback={<div className="text-center py-8">Loading...</div>}>
+      <NewsPageContent />
+    </Suspense>
+  );
+}
+
+function NewsPageContent() {
+  const searchParams = useSearchParams();
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any>(null);
   
   // Filters
-  const [symbol, setSymbol] = useState("");
+  const [symbol, setSymbol] = useState(searchParams.get("symbol") || "");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [source, setSource] = useState("");
@@ -64,6 +74,15 @@ export default function NewsPage() {
       setLoading(false);
     }
   };
+
+  // Keep the symbol filter in sync when the URL ?symbol= param changes
+  // (e.g., navigating from the Trade List "View News" link while already
+  // mounted on this page).
+  const urlSymbol = searchParams.get("symbol") || "";
+  useEffect(() => {
+    setSymbol(urlSymbol);
+    setOffset(0);
+  }, [urlSymbol]);
 
   useEffect(() => {
     fetchNews();

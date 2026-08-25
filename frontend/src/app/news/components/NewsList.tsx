@@ -12,6 +12,7 @@ export function NewsList({ items, onItemClick }: NewsListProps) {
     switch (source) {
       case "edgar": return "📄";  // SEC filing
       case "rss": return "📰";   // RSS article
+      case "insider": return "🔒";  // SEC insider trade
       case "truth_social": return "🐦";  // Truth Social
       default: return "📌";
     }

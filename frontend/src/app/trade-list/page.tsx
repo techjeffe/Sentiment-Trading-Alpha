@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Trash2, TrendingUp, TrendingDown, FileText, BarChart2, RefreshCw, Info } from "lucide-react";
+import { SourceDetailModal } from "./components/SourceDetailModal";
 
 interface TradingOpportunity {
   id: number;
@@ -41,6 +42,7 @@ export default function TradeListPage() {
   const [minScore, setMinScore] = useState(0);
   const [newCount, setNewCount] = useState(0);
   const [discovering, setDiscovering] = useState(false);
+  const [sourceModalOpp, setSourceModalOpp] = useState<TradingOpportunity | null>(null);
 
   // Check if opportunity is new (added in last 24 hours)
   const isNew = (addedAt: string) => {
@@ -339,10 +341,14 @@ export default function TradeListPage() {
                             <TrendingUp size={14} />
                             {opp.signal_count} signals
                           </span>
-                          <span className="flex items-center gap-1">
+                          <button
+                            onClick={() => setSourceModalOpp(opp)}
+                            className="flex items-center gap-1 text-blue-400 hover:text-blue-300 hover:underline cursor-pointer"
+                            title="Click to see source details"
+                          >
                             <FileText size={14} />
-                            {opp.source_count} sources
-                          </span>
+                            {opp.source_count} source{opp.source_count !== 1 ? "s" : ""}
+                          </button>
                           <span>📅 {new Date(opp.added_at).toLocaleDateString()}</span>
                         </div>
                         
@@ -405,6 +411,15 @@ export default function TradeListPage() {
               </div>
             )}
           </>
+        )}
+
+        {/* Source Detail Modal */}
+        {sourceModalOpp && (
+          <SourceDetailModal
+            opportunityId={sourceModalOpp.id}
+            symbol={sourceModalOpp.symbol}
+            onClose={() => setSourceModalOpp(null)}
+          />
         )}
       </div>
     </div>
