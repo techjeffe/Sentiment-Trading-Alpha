@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import DispatchErrorBanner from "@/components/DispatchErrorBanner";
 import {
@@ -432,6 +432,14 @@ function AlpacaEquityCurve({ history }: { history: AlpacaPortfolioHistory }) {
 // â”€â”€â”€ Main Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function TradingPage() {
+    return (
+        <Suspense fallback={<div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Loading...</div>}>
+            <TradingPageContent />
+        </Suspense>
+    );
+}
+
+function TradingPageContent() {
     const searchParams = useSearchParams();
     const symbolFromUrl = searchParams.get("symbol");
     const [data, setData] = useState<TradingData | null>(null);

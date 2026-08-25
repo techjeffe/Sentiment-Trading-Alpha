@@ -24,10 +24,15 @@ router = APIRouter(tags=["news"])  # prefix added in main.py during include_rout
 
 logger = logging.getLogger(__name__)
 
+# When filtering RSS articles by symbol, scan the most recent N articles
+# (RSS rows have no direct symbol column; ticker extraction mirrors discovery).
+# 3000 recent articles spans roughly a month of ingestion.
+SYMBOL_FILTER_ARTICLE_WINDOW = 3000
+
 
 @router.get("")
 async def get_unified_news(
-    symbol: Optional[str] = Query(None, description="Filter by symbol (EDGAR only)"),
+    symbol: Optional[str] = Query(None, description="Filter by symbol (EDGAR filings by column; RSS articles/posts by ticker extraction)"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     source: Optional[str] = Query(None, description="Filter by source: edgar, rss, truth_social"),
@@ -112,8 +117,39 @@ async def get_unified_news(
         if date_filter.get("end"):
             articles_query = articles_query.filter(ScrapedArticle.published_at < date_filter["end"])
         
+        # RSS articles have no direct symbol column. When a symbol filter is
+        # requested, match it by re-running ticker extraction over a bounded
+        # window of the most recent articles (mirrors the discovery pipeline).
+        if symbol:
+            from services.data_ingestion.ticker_extractor import extract_tickers_from_article
+            sym = symbol.upper()
+            
+            window_q = db.query(ScrapedArticle)
+            
+            if date_filter.get("start"):
+                window_q = window_q.filter(ScrapedArticle.published_at >= date_filter["start"])
+            
+            if date_filter.get("end"):
+                window_q = window_q.filter(ScrapedArticle.published_at < date_filter["end"])
+            
+            window_q = window_q.order_by(
+                ScrapedArticle.discovered_at.desc()
+            ).limit(SYMBOL_FILTER_ARTICLE_WINDOW)
+            
+            window = window_q.all()
+            
+            if source == "truth_social":
+                window = [a for a in window if "truth" in (a.source or "").lower()]
+            
+            article_rows = [
+                a for a in window
+                if sym in extract_tickers_from_article(a.title or "", a.full_content or a.summary or "")
+            ]
+        else:
+            article_rows = articles_query.all()
+        
         # Convert to unified format
-        for a in articles_query.all():
+        for a in article_rows:
             # Determine if this is Truth Social based on source
             is_truth_social = "truth" in (a.source or "").lower()
             
@@ -151,6 +187,11 @@ async def get_unified_news(
             
             # Convert to unified format
             for p in posts_query.all():
+                # When filtering by symbol, match the post content via ticker extraction
+                if symbol:
+                    from services.data_ingestion.ticker_extractor import extract_tickers
+                    if symbol.upper() not in extract_tickers(p.content or ""):
+                        continue
                 all_items.append({
                     "id": f"truth_{p.id}",
                     "source": "truth_social",
