@@ -1,5 +1,20 @@
 # Release Notes — 2026-08-25
 
+## 🌅 Opening Range (ORB) Guard — Curb First-15-Minute Opening Churn
+
+### What Changed
+- **No new exposure during the market-opening bump.** New `opening_range` block in `logic_config.json` (enabled, `wait_minutes` 15, `range_minutes` 15, `min_break_pct` 0.2%, `high_override` true). `process_signals` now blocks new entries, direction-flip re-entries, and accumulation during the first N minutes after 9:30 ET — the highest-noise part of the session. Existing positions are untouched: stop-loss, take-profit, trailing stops, HOLD closes, and flip closes all still run during the wait.
+- **Opening Range Breakout context after the wait.** Once the range forms (high/low of the first 15 minutes of 5m bars, fetched per (symbol, day) and cached), entries whose direction is *against* the opening break are skipped unless HIGH conviction overrides (`high_override`). Price inside the range = neutral, no block. Data errors fail open (never block trading on a missing price feed); pre-market / after-hours / overnight sessions are never gated.
+- **Observable.** Skipped signals record `action: skipped` with `reason: opening_wait | opening_range_against` and an `opening_range` payload (range high/low, price side, minutes since open) on the action summary, plus `[paper]` logs.
+
+### Testing
+- New `backend/tests/test_opening_range.py` (12 tests: wait window, against-break blocking both sides, HIGH override, fail-open on missing data/zero price/disabled config, session scope). `test_paper_trading.py`, `test_flip_management.py`, `test_paper_trading_enforcement.py` pass.
+
+### Files Changed
+- `backend/config/logic_config.json`; `backend/services/paper_trading.py`; `backend/tests/test_opening_range.py`, `backend/tests/conftest.py`; `REFERENCE.md`
+
+---
+
 ## 📈 Trade List & News: Symbol-Filtered News, Source Details, Insider Materiality, Trade Churn Reduction
 
 ### What Changed

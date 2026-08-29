@@ -221,6 +221,7 @@ The backend runs `migrate.py` automatically on every startup. This table is for 
 | `best_price_seen` | `paper_trades` | `NULL` | High/low-water mark for trailing stop |
 | `trail_on_window_expiry` | `app_config` | `true` | Transition to trailing stop on window expiry |
 | `reentry_cooldown_minutes` | `app_config` | `NULL` | Block same-direction re-entry for N minutes |
+| `opening_range` | `logic_config.json` | enabled; wait 15m; range 15m; break 0.2% | ORB guard: skip new exposure during opening wait, block entries against the opening break |
 | `min_same_day_exit_edge_pct` | `app_config` | `NULL` | Minimum profit edge before closing same-day winner |
 | `alpaca_live_trading_enabled` | `app_config` | `false` | Master kill switch for real-money orders |
 | `alpaca_allow_short_selling` | `app_config` | `false` | Allow direct short sells |

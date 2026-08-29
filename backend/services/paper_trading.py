@@ -374,6 +374,128 @@ def _safe_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
+# ── OPENING RANGE (ORB) GUARD ───────────────────────────────────────────
+# _opening_range_cache[(symbol, YYYY-MM-DD)] = {high, low, bar_count} | None
+# The range is fixed once the first `range_minutes` of the day have elapsed,
+# so caching per (symbol, day) is correct for the rest of that session.
+_opening_range_cache: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
+
+
+def _opening_range_data(symbol: str, now_et: datetime, range_minutes: float) -> Optional[Dict[str, Any]]:
+    """Fetch today's opening range (first `range_minutes` of 5m bars) for a symbol.
+
+    Returns {"high", "low", "bar_count"} or None when bars are unavailable or the
+    range window has not fully elapsed — callers fail OPEN on None (no block).
+    Successful results are cached per (symbol, day); failures are not cached so
+    a later run retries.
+    """
+    day_key = now_et.strftime("%Y-%m-%d")
+    cache_key = (str(symbol).upper(), day_key)
+    if cache_key in _opening_range_cache:
+        return _opening_range_cache[cache_key]
+
+    result: Optional[Dict[str, Any]] = None
+    try:
+        from services.data_ingestion.yfinance_client import PriceClient
+        opened = datetime.combine(now_et.date(), _REGULAR_OPEN, tzinfo=_MARKET_TZ)
+        window_end = opened + timedelta(minutes=range_minutes)
+        bar_interval = 5.0
+        df = PriceClient().get_ohlcv_data_range(
+            symbol, start=opened, end=window_end + timedelta(minutes=1), interval="5m"
+        )
+        if df is not None and not df.empty:
+            last_bar_ts = df.index[-1]
+            if hasattr(last_bar_ts, "tzinfo") and last_bar_ts.tzinfo is None:
+                last_bar_ts = last_bar_ts.tz_localize(_MARKET_TZ)
+            elif hasattr(last_bar_ts, "tzinfo"):
+                last_bar_ts = last_bar_ts.tz_convert(_MARKET_TZ) if last_bar_ts.tzinfo else last_bar_ts
+            # Require the range window to be (nearly) complete: last bar within
+            # two bar-intervals of window end. Guards against caching a partial
+            # range when the 9:45 bar hasn't printed yet.
+            window_complete = (
+                hasattr(last_bar_ts, "tzinfo")
+                and last_bar_ts.tzinfo is not None
+                and last_bar_ts >= window_end - timedelta(minutes=2 * bar_interval)
+            )
+            if window_complete:
+                high = float(df["High"].max())
+                low = float(df["Low"].min())
+                if high > low > 0:
+                    result = {"high": round(high, 4), "low": round(low, 4), "bar_count": int(len(df))}
+    except Exception as exc:
+        print(f"[paper] opening range fetch failed for {symbol}: {exc}")
+
+    _opening_range_cache[cache_key] = result
+    if result is None:
+        print(f"[paper] opening range unavailable for {symbol} ({day_key}) — fail open")
+    return result
+
+
+def _opening_range_block(
+    underlying: str,
+    execution_ticker: str,
+    entry_price: float,
+    signal_type: str,
+    conviction_level: str,
+    now: datetime,
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """Opening Range (ORB) guard for NEW exposure during the regular session.
+
+    Returns (skip_reason, range_info) to BLOCK a new entry, or None to allow.
+    - During the first `wait_minutes` after 9:30 ET → block everything.
+    - After the range forms: block LOW/MEDIUM entries whose direction is AGAINST
+      the opening break (price broke above range → no new SHORT, and vice
+      versa). HIGH conviction (high_override) may still enter. Price inside the
+      range → neutral, allow.
+    - Fail-open: any data problem (no bars, fetch error, price <= 0) returns None.
+    """
+    or_cfg = _L.get("opening_range") or {}
+    if not or_cfg.get("enabled", True):
+        return None
+    wait_minutes = float(or_cfg.get("wait_minutes", 15))
+    range_minutes = float(or_cfg.get("range_minutes", 15))
+    if wait_minutes <= 0 and range_minutes <= 0:
+        return None
+    if entry_price <= 0 or not execution_ticker or not underlying:
+        return None
+
+    now_et = _safe_utc(now).astimezone(_MARKET_TZ)
+    t = now_et.time()
+    if t < _REGULAR_OPEN or t >= _REGULAR_CLOSE or now_et.weekday() >= 5:
+        return None  # regular-session only
+
+    opened = datetime.combine(now_et.date(), _REGULAR_OPEN, tzinfo=_MARKET_TZ)
+    mins_since_open = (now_et - opened).total_seconds() / 60.0
+    if wait_minutes > 0 and mins_since_open < wait_minutes:
+        return (
+            "opening_wait",
+            {"minutes_since_open": round(mins_since_open, 1), "wait_minutes": wait_minutes},
+        )
+    if range_minutes <= 0:
+        return None
+
+    rng = _opening_range_data(execution_ticker, now_et, range_minutes)
+    if rng is None:
+        return None
+    high, low = float(rng["high"]), float(rng["low"])
+    min_break = float(or_cfg.get("min_break_pct", 0.2)) / 100.0
+    above = entry_price >= high * (1.0 + min_break)
+    below = entry_price <= low * (1.0 - min_break)
+    side = "above" if above else ("below" if below else "inside")
+    rng["price_side"] = side
+    rng["current_price"] = round(entry_price, 2)
+    if side == "inside":
+        return None
+
+    is_long = str(signal_type or "").upper() == "LONG"
+    with_break = (side == "above" and is_long) or (side == "below" and not is_long)
+    if with_break:
+        return None
+    if str(conviction_level or "").upper() == "HIGH" and or_cfg.get("high_override", True):
+        return None
+    return ("opening_range_against", rng)
+
+
 def _min_same_day_exit_edge_pct(app_config) -> float:
     try:
         override = getattr(app_config, "min_same_day_exit_edge_pct", None) if app_config is not None else None
@@ -1170,6 +1292,24 @@ def process_signals(
         _atr_pct = float(rec.get("atr_pct") or 0.0)
 
         if position_unchanged:
+            # ── Opening range guard: no NEW exposure (accumulation) during
+            # the opening wait / against the opening break. Existing position
+            # is left untouched when blocked (window just isn't refreshed).
+            _or_block = _opening_range_block(
+                underlying, execution_ticker, entry_price, signal_type, conviction_level, now
+            )
+            if _or_block:
+                _or_reason, _or_info = _or_block
+                action_summary["action"] = "skipped"
+                action_summary["reason"] = _or_reason
+                action_summary["opening_range"] = _or_info
+                print(
+                    f"[paper] {underlying} {signal_type}: skipped — {_or_reason} "
+                    f"(no accumulation {_or_info})"
+                )
+                actions.append(action_summary)
+                continue
+
             # ── Accumulation on re-confirmation ────────────────────────
             # When enabled, re-confirmed signals add additional shares up to
             # max_multiplier × original_amount. The entry price is blended.
@@ -1431,6 +1571,24 @@ def process_signals(
             action_summary["reason"] = "conviction_window_blocks_flip"
             action_summary["holding_window_until"] = _utc_iso(open_pos.holding_window_until)
             print(f"[paper] {underlying} {signal_type}: held — conviction window blocks direction flip until {_utc_iso(open_pos.holding_window_until)}")
+            actions.append(action_summary)
+            continue
+
+        # ── Opening range guard: no NEW exposure before the range forms /
+        # against the opening break. Runs after stop-loss / take-profit /
+        # flip-close above so lifecycle exits keep working during the wait.
+        _or_block = _opening_range_block(
+            underlying, execution_ticker, entry_price, signal_type, conviction_level, now
+        )
+        if _or_block:
+            _or_reason, _or_info = _or_block
+            action_summary["action"] = "skipped"
+            action_summary["reason"] = _or_reason
+            action_summary["opening_range"] = _or_info
+            print(
+                f"[paper] {underlying} {signal_type}: skipped — {_or_reason} "
+                f"({_or_info})"
+            )
             actions.append(action_summary)
             continue
 

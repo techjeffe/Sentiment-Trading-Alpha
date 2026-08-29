@@ -41,6 +41,14 @@
     "max_multiplier": 5.0
   },
   "reentry_cooldown_minutes": 120,
+  "opening_range": {
+    "_comment": "Opening Range (ORB) guard for the regular session. wait_minutes: no NEW exposure during the first N minutes after 9:30 ET (existing positions still get stop-loss/trailing/HOLD closes). range_minutes: opening range = high/low of the first N minutes of 5m bars. min_break_pct: % beyond the range edge required to count as a 'break'. high_override: HIGH-conviction signals may enter against the break. Fail-open on price-data errors.",
+    "enabled": true,
+    "wait_minutes": 15,
+    "range_minutes": 15,
+    "min_break_pct": 0.2,
+    "high_override": true
+  },
   "min_same_day_exit_edge_pct": 0.5,
   "stop_loss_pct": 2.0,
   "take_profit_pct": 3.0,
