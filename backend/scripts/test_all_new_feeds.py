@@ -8,7 +8,8 @@ import time
 from typing import List, Tuple
 
 # Add backend to path
-sys.path.insert(0, '/Users/jeffeberhard/github/Sentiment-Trading-Alpha/backend')
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.news_sources import get_all_sources
 

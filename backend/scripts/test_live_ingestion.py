@@ -14,10 +14,11 @@ import os
 from datetime import datetime, timezone
 
 # Add backend to path
-sys.path.insert(0, '/Users/jeffeberhard/github/Sentiment-Trading-Alpha/backend')
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Set DATABASE_URL to a local file for testing
-os.environ['DATABASE_URL'] = 'sqlite:////Users/jeffeberhard/github/Sentiment-Trading-Alpha/test_trading_system.db'
+os.environ['DATABASE_URL'] = 'sqlite:///' + os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'test_trading_system.db')
 
 
 async def init_database():
@@ -134,7 +135,7 @@ async def main():
         print("\n[OVERALL STATUS] Check the analysis above for details.")
     
     # Cleanup test database
-    test_db = '/Users/jeffeberhard/github/Sentiment-Trading-Alpha/test_trading_system.db'
+    test_db = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'test_trading_system.db')
     if os.path.exists(test_db):
         print(f"\nTest database created at: {test_db}")
         print("You can delete it or keep it for further testing.")

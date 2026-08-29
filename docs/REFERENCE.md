@@ -10,7 +10,8 @@
 qwen-3.5-9b-getrich/
 |- backend/
 |  |- main.py
-|  |- test_stage1.py
+|  |- scripts/                     # dev/ops utilities (feed checks, db analysis)
+|  |  |- test_stage1.py
 |  |- routers/
 |  |  |- analysis.py
 |  |  |- config.py
@@ -252,7 +253,7 @@ python -m database.migrate
 Before committing to a model for Stage 1 entity extraction, run the smoke test:
 
 ```powershell
-cd backend
+cd backend/scripts
 python test_stage1.py
 ```
 
