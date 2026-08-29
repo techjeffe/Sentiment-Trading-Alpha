@@ -299,6 +299,7 @@ When `accumulate_on_confirmation` is enabled (default: on), re-confirmed signals
 - Alpaca max position cap would be exceeded
 - Portfolio cap would be exceeded
 - Accumulation is disabled via Admin UI toggle
+- Opening range guard is active (see [Opening Range (ORB) Guard](#opening-range-orb-guard))
 
 ### Configuration
 
@@ -306,6 +307,32 @@ When `accumulate_on_confirmation` is enabled (default: on), re-confirmed signals
 |---|---|---|
 | `accumulate_on_confirmation_enabled` | `true` | Yes (Admin → Trading Logic) |
 | `accumulate_max_multiplier` | `5.0` | Yes (Admin → Trading Logic) |
+
+---
+
+## Opening Range (ORB) Guard
+
+To avoid trading into the market-opening bump, new exposure is gated for the first minutes of the regular session and then checked against the day's opening range. Configured in `logic_config.json → opening_range` (values read from the JSON file only — no Admin UI field yet).
+
+| Setting | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Master toggle for the whole guard |
+| `wait_minutes` | `15` | No NEW exposure during the first N minutes after 9:30 ET |
+| `range_minutes` | `15` | Opening range = high/low of the first N minutes of 5m bars |
+| `min_break_pct` | `0.2` | % beyond the range edge before a move counts as a "break" |
+| `high_override` | `true` | HIGH-conviction signals may enter against the break |
+
+### How It Works
+
+1. **Wait phase** — for `wait_minutes` after 9:30 ET, new entries, direction-flip re-entries, and accumulation are skipped. Existing positions are untouched: stop-loss, take-profit, trailing stops, HOLD closes, and flip closes all still run.
+2. **Range phase** — once the opening range has formed (first `range_minutes` of 5m bars, fetched per symbol/day and cached), the current price is classified as `above`, `below`, or `inside` the range (using `min_break_pct` as a buffer band).
+3. **Follow the break** — entries whose direction is *against* the break are skipped (price broke above → no new SHORT, and vice versa), unless `high_override` allows HIGH conviction through. Price inside the range = neutral, no block.
+
+### Fail-Open & Scope
+
+- Missing/incomplete price data never blocks trading (fail-open).
+- Applies to the regular session only — pre-market, after-hours, and overnight are never gated.
+- Skipped signals log `reason: opening_wait | opening_range_against` with an `opening_range` payload (range high/low, price side, minutes since open).
 
 ---
 
@@ -340,6 +367,7 @@ The **Portfolio Cap ($)** in Admin limits total open notional exposure across al
 The paper trading simulation auto-executes a volatility-normalized trade per signal during extended market hours (Mon–Fri, 4:00 AM – 8:00 PM ET).
 
 - **Re-entry cooldown:** 120 minutes — blocks same-direction re-entry in the same symbol after a close
+- **Opening range guard:** no new exposure during the first 15 minutes after the open, then blocks entries against the opening break (see [Opening Range (ORB) Guard](#opening-range-orb-guard))
 - **Same-day exit filter:** `min_same_day_exit_edge_pct` (default 0.5%) — same-day winners below this threshold are held instead of closed
 - Each unique symbol gets one open position at a time
 - P&L is tracked using directional math: shorts profit from price declines
@@ -368,6 +396,6 @@ Go to **Admin → Trading Logic** to change:
 Leave a field blank to revert to the system default.
 
 ### JSON Config (power users)
-Edit `backend/config/logic_config.json` and restart the backend. All scoring weights, red-team thresholds, holding period defaults, leverage caps, decay half-lives, conviction window settings, technical confidence modifiers, trailing stop behavior, and ATR bounds live here. The JSON ships with defaults that match the current production values.
+Edit `backend/config/logic_config.json` and restart the backend. All scoring weights, red-team thresholds, holding period defaults, leverage caps, decay half-lives, conviction window settings, technical confidence modifiers, trailing stop behavior, ATR bounds, and the opening range guard live here. The JSON ships with defaults that match the current production values.
 
 Admin UI values take precedence over JSON values for the fields listed above.
