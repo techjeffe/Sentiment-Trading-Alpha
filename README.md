@@ -435,9 +435,9 @@ npm run dev:verbose
 ## 📚 Learn More
 
 ### For Curious Minds:
-- **[How It Works](docs/REFERENCE.md)** — Technical details about the AI pipeline
+- **[How It Works](REFERENCE.md)** — Technical details about the AI pipeline
 - **[Alpha Analytics](http://localhost:3000/alpha)** — Deep dive into performance metrics
-- **[Configuration Guide](docs/REFERENCE.md#configuration)** — All the settings explained
+- **[Configuration Guide](REFERENCE.md#configuration)** — All the settings explained
 
 ### For Developers:
 - The codebase is open-source and well-documented

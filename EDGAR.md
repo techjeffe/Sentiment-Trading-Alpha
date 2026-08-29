@@ -3,7 +3,7 @@
 
 > Draft spec for adding SEC EDGAR filing polling + LLM summarization to the
 > sentiment pipeline. Written to match existing repo conventions documented in
-> `docs/REFERENCE.md` / `CLAUDE.md`. **Verify the EDGAR API details below against
+> `REFERENCE.md` / `CLAUDE.md`. **Verify the EDGAR API details below against
 > the live docs at https://www.sec.gov/edgar/sec-api-documentation before
 > building — they were compiled from general knowledge, not a fresh fetch.**
 
@@ -187,7 +187,7 @@ Part B — Existing repo architecture (from investigation)
 
 B.1 REFERENCE.md / CLAUDE.md — governing docs
 
-- docs/REFERENCE.md (docs/) is the architecture "bible": project structure
+- REFERENCE.md (repo root) is the architecture "bible": project structure
 tree, API reference, a running Schema Migration Reference table
 (every DB column/table ever added, with default + purpose — append new
 EDGAR tables/columns here), and a Validation Sources section
@@ -315,7 +315,7 @@ CREATE INDEX ix_sec_filings_symbol ON sec_filings (symbol);
 CREATE INDEX ix_sec_filings_processed ON sec_filings (processed);
 CREATE INDEX ix_sec_filings_filing_date ON sec_filings (filing_date);
 
-Append this table to docs/REFERENCE.md's Schema Migration Reference table once
+Append this table to REFERENCE.md's Schema Migration Reference table once
 built.
 
 B.6 logic_config.json — "never hardcode thresholds"
@@ -405,7 +405,7 @@ config.extraction_model.
 format_symbol_specialist_context_prompt(...)'s existing
 validation_context / a new filing_context parameter, alongside FRED/
 EIA and web-research context, so Stage 2 scoring picks it up unchanged.
-9. Update docs/REFERENCE.md (Schema Migration Reference table + a new "SEC
+9. Update REFERENCE.md (Schema Migration Reference table + a new "SEC
 EDGAR Filings" section) and RELEASENOTES.md per the repo's PR template
 in CLAUDE.md.
 
