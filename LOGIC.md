@@ -367,6 +367,10 @@ The **Portfolio Cap ($)** in Admin limits total open notional exposure across al
 The paper trading simulation auto-executes a volatility-normalized trade per signal during extended market hours (Mon–Fri, 4:00 AM – 8:00 PM ET).
 
 - **Re-entry cooldown:** 120 minutes — blocks same-direction re-entry in the same symbol after a close
+- **Entry confirmation:** `entry_confirmation.runs_required` (default 3) — a NEW position or direction flip requires the same direction on N consecutive analysis runs. One score blip (e.g. a single 0.74 spike) can no longer re-open a position you just closed at the top of a rally. HIGH-conviction flips and same-direction ticker/leverage upgrades are exempt (thesis continuations).
+- **No flip-back cooldown:** `reentry_no_flip_minutes` (default 60) — blocks flipping back to the opposite direction within N minutes of a close.
+- **Same-day no-rebuy:** `same_day_no_rebuy_minutes` (default 60) — if you just closed a position and the new entry price is within ~0.35% of that exit, it's treated as a churn round-trip and skipped.
+- **Trailing-stop warmup:** `trailing_stop.warmup_minutes` (default 30) + `min_favorable_move_pct` (0.5) — a trailing stop is not armed until the position is 30 min old (or has already moved ≥0.5% favorably). Prevents the trail from firing on opening noise and forcing a same-price round-trip.
 - **Opening range guard:** no new exposure during the first 15 minutes after the open, then blocks entries against the opening break (see [Opening Range (ORB) Guard](#opening-range-orb-guard))
 - **Same-day exit filter:** `min_same_day_exit_edge_pct` (default 0.5%) — same-day winners below this threshold are held instead of closed
 - Each unique symbol gets one open position at a time

@@ -452,6 +452,22 @@ class PipelineService:
                             "confidence": result.get("confidence"),
                             "directional": result.get("directional_score"),
                         }
+                        # Bug fix: decay is applied to the runtime signal but was
+                        # never reflected in the log. Compute + record the true
+                        # blended scores and factors (was: raw_scores passed as
+                        # blended_scores with decay_info=None).
+                        _decay = self._compute_decay_metrics(sym)
+                        _df = _decay.get("decay_factor") or 1.0
+                        _hf = _decay.get("hold_decay_factor") or _df
+                        blended_scores = {
+                            "bluster": raw_scores["bluster"],
+                            "policy": raw_scores["policy"],
+                            "confidence": raw_scores["confidence"],
+                            "directional": (
+                                raw_scores["directional"] * _df
+                                if raw_scores.get("directional") is not None else None
+                            ),
+                        }
                         signal_dict = consensus_signal.model_dump(mode="json") if consensus_signal else {}
                         parsed_payload = result.get("parsed_payload") or {}
                         dl.log_symbol_scores(
@@ -460,7 +476,8 @@ class PipelineService:
                             symbol=sym,
                             blue_team_output=parsed_payload,
                             raw_scores=raw_scores,
-                            blended_scores=raw_scores,
+                            decay_info=_decay,
+                            blended_scores=blended_scores,
                             final_signal={
                                 "type": signal_dict.get("signal_type"),
                                 "conviction": signal_dict.get("conviction_level"),
@@ -514,6 +531,53 @@ class PipelineService:
                     print(f"[pipeline] Error releasing analysis lock: {exc}")
 
     # ── Helpers (private) ───────────────────────────────────────────────
+
+    def _compute_decay_metrics(self, symbol: str) -> dict:
+        """Compute the decay half-lives + factor + hold factor for a symbol.
+
+        Mirrors SignalService._compute_decay_factor / _compute_hold_decay_factor
+        so the decision log records the TRUE blended/decayed values instead of
+        the raw model scores (bug fix: blended_scores was passing raw_scores).
+        Uses signal age from the previous analysis timestamp (same source the
+        router passes into generate_trading_signal).
+        """
+        decay_cfg = self._L.get("signal_decay") or {}
+        enabled = decay_cfg.get("enabled", True)
+        age_hours = 0.0
+        try:
+            prev = self._hysteresis.latest_previous_analysis_state(self._db)
+            _prev_analysis = (prev or {}).get("analysis")
+            _prev_ts = getattr(_prev_analysis, "timestamp", None) if _prev_analysis else None
+            if _prev_ts is not None:
+                if _prev_ts.tzinfo is None:
+                    _prev_ts = _prev_ts.replace(tzinfo=timezone.utc)
+                age_hours = (datetime.now(timezone.utc) - _prev_ts).total_seconds() / 3600.0
+        except Exception:
+            age_hours = 0.0
+
+        half_lives = decay_cfg.get("symbol_half_lives", {})
+        half_life = float(half_lives.get(str(symbol).upper(), decay_cfg.get("default_half_life_hours", 3.0)))
+        hold_half_life = float(
+            (decay_cfg.get("symbol_hold_half_lives") or {}).get(
+                str(symbol).upper(), decay_cfg.get("default_hold_half_life_hours", 6.0)
+            )
+        )
+        min_factor = float(decay_cfg.get("min_decay_factor", 0.10))
+
+        def _f(h: float) -> float:
+            if not enabled or age_hours <= 0.0:
+                return 1.0
+            return max(min_factor, 0.5 ** (age_hours / h))
+
+        entry_f = _f(half_life)
+        hold_f = _f(hold_half_life) if hold_half_life > 0 else entry_f
+        return {
+            "half_life": half_life if enabled else None,
+            "hold_half_life": hold_half_life if enabled else None,
+            "decay_factor": entry_f if enabled else None,
+            "hold_decay_factor": hold_f if enabled else None,
+            "age_hours": age_hours,
+        }
 
     def _get_default_symbols(self) -> List[str]:
         """Return the default symbol list when no symbols are explicitly provided."""

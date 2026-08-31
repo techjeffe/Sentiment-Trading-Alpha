@@ -31,6 +31,14 @@ _cron_overlap_keys: Dict[Tuple[str, str], datetime] = {}
 _cron_overlap_underlying_keys: Dict[str, datetime] = {}
 _last_order_times: Dict[str, datetime] = {}
 
+# ── ENTRY CONFIRMATION STREAK TRACKER (module-level, persists across runs) ──
+# _confirmation_streaks[(underlying, direction)] = (run_utc, streak_count)
+# Tracks consecutive analysis runs agreeing on a direction so a new entry or
+# flip requires N consecutive confirmations, not a single score blip.
+_confirmation_streaks: Dict[Tuple[str, str], tuple] = {}
+
+# ── CHURN COUNTERS (for observability / logs only) ──
+_churn_blocked: Dict[str, int] = {"confirmation": 0, "no_flip": 0, "no_rebuy": 0, "trailing_warmup": 0}
 # 24/5 trading schedule (Alpaca: Sun 8 PM ET → Fri 8 PM ET)
 _OVERNIGHT_OPEN  = time_cls(20, 0)   # 8:00 PM ET — overnight session start
 _OVERNIGHT_CLOSE = time_cls(4, 0)    # 4:00 AM ET — overnight session end
@@ -665,6 +673,145 @@ def _apply_flip_hold(open_pos, conviction_level: str, trading_type: str,
     }
 
 
+# ── ENTRY CONFIRMATION + CHURN GUARDS ───────────────────────────────────
+def _update_confirmation_streak(underlying: str, signal_type: str, now: datetime) -> int:
+    """Update and return the current same-direction streak for (underlying, direction).
+
+    Confirmation guard (#3): a NEW position (or flip) requires the same
+    direction on N consecutive runs. Any other direction, a HOLD, or a gap
+    longer than max_gap_minutes resets the streak back to 1.
+    """
+    cfg = _L.get("entry_confirmation") or {}
+    if not cfg.get("enabled", True):
+        return 1  # disabled → always "confirmed"
+    max_gap_min = int(cfg.get("max_gap_minutes", 45))
+    key = (str(underlying).upper(), str(signal_type).upper())
+    prev = _confirmation_streaks.get(key)
+    now_utc = _safe_utc(now)
+    if prev:
+        prev_ts, prev_count = prev
+        gap = (now_utc - _safe_utc(prev_ts)).total_seconds() / 60.0
+        if gap > max_gap_min:
+            streak = 1  # stale streak — restart
+        else:
+            streak = prev_count + 1
+    else:
+        streak = 1
+    _confirmation_streaks[key] = (now_utc, streak)
+    return streak
+
+
+def _confirmation_ready(underlying: str, signal_type: str, now: datetime) -> bool:
+    """True if the confirmation streak for this direction met the required count."""
+    cfg = _L.get("entry_confirmation") or {}
+    if not cfg.get("enabled", True):
+        return True
+    required = int(cfg.get("runs_required", 3))
+    if required <= 1:
+        return True
+    # An opposing-direction signal resets that side's streak (thesis shifted).
+    opp = "SHORT" if str(signal_type).upper() == "LONG" else "LONG"
+    _reset_confirmation_streak(underlying, opp)
+    # Advance the streak (this run counts) then check it.
+    count = _update_confirmation_streak(underlying, signal_type, now)
+    return count >= required
+
+
+def _reset_confirmation_streak(underlying: str, signal_type: str) -> None:
+    """Reset the streak for a direction (called when the opposed direction fires)."""
+    key = (str(underlying).upper(), str(signal_type).upper())
+    _confirmation_streaks.pop(key, None)
+
+
+def _no_flip_blocks_open(
+    open_pos, signal_type: str, now: datetime, logic_config: dict = None
+) -> bool:
+    """Guard #4: block flipping BACK to a recently-closed opposite direction.
+
+    Re-entry cooldown only blocks same-direction re-entry. This catches the
+    SHORT→LONG flip 81 min after exit: once we flip away from a side, we won't
+    accept a signal flipping back to it within reentry_no_flip_minutes.
+    """
+    lg = logic_config or _L
+    noflip_min = int(lg.get("reentry_no_flip_minutes", 60))
+    if noflip_min <= 0 or open_pos is None:
+        return False
+    # Only applies when the incoming signal is opposite the open position's side.
+    if str(open_pos.signal_type or "").upper() == str(signal_type or "").upper():
+        return False
+    exit_ts = _safe_utc(getattr(open_pos, "exited_at", None))
+    if exit_ts is None:
+        return False
+    return _safe_utc(now) < exit_ts + timedelta(minutes=noflip_min)
+
+
+def _same_day_rebuy_blocks(
+    underlying: str, signal_type: str, entry_price: float, now: datetime, db
+) -> bool:
+    """Guard #6: skip re-opening a position at roughly the price we just sold.
+
+    Today we sold SPCX at 140.95 and re-bought at 140.95 (2h later, realized
+    -1.39% on a round trip to the same price). If we closed a position in this
+    underlying within same_day_no_rebuy_minutes, and the new entry price is
+    within ~0.35% of that exit, it's a churn round-trip — skip.
+    """
+    from database.models import PaperTrade
+    no_rebuy_min = int(_L.get("same_day_no_rebuy_minutes", 60))
+    if no_rebuy_min <= 0 or entry_price <= 0:
+        return False
+    recent = (
+        db.query(PaperTrade)
+        .filter(
+            PaperTrade.underlying == underlying,
+            PaperTrade.exited_at.isnot(None),
+        )
+        .order_by(PaperTrade.exited_at.desc())
+        .first()
+    )
+    if not recent or recent.exited_at is None:
+        return False
+    exit_ts = _safe_utc(recent.exited_at)
+    if _safe_utc(now) > exit_ts + timedelta(minutes=no_rebuy_min):
+        return False
+    exit_price = float(recent.exit_price or 0)
+    if exit_price <= 0:
+        return False
+    # Within 0.35% of the exit price = churn round-trip
+    return abs(entry_price - exit_price) / exit_price <= 0.0035
+
+
+def _trailing_warmup_blocks(open_pos, now: datetime, logic_config: dict = None) -> bool:
+    """Guard #5: don't arm/keep a trailing stop until the position is mature.
+
+    Trailing stops fire on noise. Wait warmup_minutes after entry (or until the
+    position has moved at least min_favorable_move_pct in its favor) before
+    clearing/respecting a HOLD-signal trailing stop. During warmup the position
+    is left alone (no trailing stop is set, existing stops are ignored).
+    """
+    lg = logic_config or _L
+    ts = lg.get("trailing_stop") or {}
+    warmup_min = int(ts.get("warmup_minutes", 30))
+    min_fav = float(ts.get("min_favorable_move_pct", 0.5))
+    if warmup_min <= 0:
+        return False
+    entered = _safe_utc(getattr(open_pos, "entered_at", None))
+    if not entered:
+        return False
+    age_min = (_safe_utc(now) - entered).total_seconds() / 60.0
+    if age_min >= warmup_min:
+        return False
+    # Favorable move already achievable → arm immediately
+    px_now = float(getattr(open_pos, "current_price", 0) or 0)
+    entry_px = float(getattr(open_pos, "entry_price", 0) or 0)
+    if entry_px > 0 and min_fav > 0:
+        is_long = str(getattr(open_pos, "signal_type", "") or "").upper() == "LONG"
+        pct = (px_now - entry_px) / entry_px * 100.0 if is_long else (entry_px - px_now) / entry_px * 100.0
+        if pct >= min_fav:
+            return False
+    return True
+
+
+
 def _portfolio_cap_for_config(app_config) -> Optional[float]:
     """Return the configured portfolio cap in USD, or None if uncapped."""
     try:
@@ -1160,6 +1307,18 @@ def process_signals(
         existing_pos_price = _resolve_position_market_price(open_pos, quotes_by_symbol)
 
         if open_pos and open_pos.trailing_stop_price is not None and existing_pos_price > 0:
+            # Guard #5: during trailing warmup, ignore the trailing stop entirely
+            # (don't let a pre-warmup legacy stop fire on noise either).
+            if _trailing_warmup_blocks(open_pos, now):
+                action_summary["action"] = "held"
+                action_summary["reason"] = "trailing_warmup"
+                action_summary["trailing_stop_price"] = open_pos.trailing_stop_price
+                print(
+                    f"[paper] {underlying}: trailing stop ignored during warmup "
+                    f"({_L.get('trailing_stop', {}).get('warmup_minutes', 30)}min)"
+                )
+                actions.append(action_summary)
+                continue
             stop_px = float(open_pos.trailing_stop_price or 0)
             if stop_px > 0:
                 _trailing_stop_hit = (
@@ -1217,6 +1376,20 @@ def process_signals(
                 action_summary["holding_window_until"] = _utc_iso(open_pos.holding_window_until)
             elif open_pos:
                 # HOLD with no active window — set trailing stop instead of forcing close
+                # Guard #5: during trailing warmup (first warmup_minutes after entry,
+                # or before a min_favorable_move_pct favorable move), do NOT arm a
+                # trailing stop — the position is too young; a trail would fire on
+                # noise and force a churn re-entry at the same price.
+                if _trailing_warmup_blocks(open_pos, now):
+                    _churn_blocked["trailing_warmup"] = _churn_blocked.get("trailing_warmup", 0) + 1
+                    action_summary["action"] = "held"
+                    action_summary["reason"] = "trailing_warmup"
+                    print(
+                        f"[paper] {underlying}: HOLD — trailing stop held off (warmup "
+                        f"{_L.get('trailing_stop', {}).get('warmup_minutes', 30)}min)"
+                    )
+                    actions.append(action_summary)
+                    continue
                 _pos_prices = quotes_by_symbol.get(open_pos.execution_ticker) or quotes_by_symbol.get(underlying) or {}
                 current_px = float(_pos_prices.get("current_price") or _pos_prices.get("price") or 0.0)
                 if current_px > 0:
@@ -1588,6 +1761,56 @@ def process_signals(
             print(
                 f"[paper] {underlying} {signal_type}: skipped — {_or_reason} "
                 f"({_or_info})"
+            )
+            actions.append(action_summary)
+            continue
+
+        # ── Confirmation guard (#3): require N consecutive same-direction runs
+        # before opening a NEW position or flipping direction. Streak is
+        # updated per run; a HOLD or opposite direction resets it elsewhere.
+        # EXEMPTIONS (both are thesis continuations, not churn):
+        #   - approved flips (HIGH / strong-MEDIUM early-close)
+        #   - same-direction ticker/leverage changes (e.g. SPY→SQQQ on a SHORT)
+        # Accumulation (position_unchanged) is NOT gated — adding to a thesis.
+        _same_dir_change = open_pos is not None and not is_direction_flip
+        if not (is_direction_flip and _flip_early_close) and not _same_dir_change and not _confirmation_ready(underlying, signal_type, now):
+            _streak = _confirmation_streaks.get(
+                (underlying.upper(), signal_type.upper()), (None, 0)
+            )[1]
+            _churn_blocked["confirmation"] = _churn_blocked.get("confirmation", 0) + 1
+            action_summary["action"] = "skipped"
+            action_summary["reason"] = "confirmation_pending"
+            action_summary["confirmation_streak"] = _streak
+            print(
+                f"[paper] {underlying} {signal_type}: skipped — confirmation pending "
+                f"(streak={_streak}, need {_L.get('entry_confirmation', {}).get('runs_required', 3)})"
+            )
+            actions.append(action_summary)
+            continue
+
+        # ── Guard #4: no flip-back within reentry_no_flip_minutes of a close.
+        # Exempts approved flips (HIGH / strong-MEDIUM early-close) — same
+        # thesis-change exception as the confirmation gate.
+        _flip_pending = not (is_direction_flip and _flip_early_close) and _no_flip_blocks_open(open_pos, signal_type, now)
+        if _flip_pending:
+            _churn_blocked["no_flip"] = _churn_blocked.get("no_flip", 0) + 1
+            action_summary["action"] = "skipped"
+            action_summary["reason"] = "no_flip_cooldown"
+            print(
+                f"[paper] {underlying} {signal_type}: skipped — no-flip cooldown "
+                f"({_L.get('reentry_no_flip_minutes', 60)}min since last close)"
+            )
+            actions.append(action_summary)
+            continue
+
+        # ── Guard #6: same-day re-buy at ~exit price (churn round-trip).
+        if _same_day_rebuy_blocks(underlying, signal_type, entry_price, now, db):
+            _churn_blocked["no_rebuy"] = _churn_blocked.get("no_rebuy", 0) + 1
+            action_summary["action"] = "skipped"
+            action_summary["reason"] = "same_day_no_rebuy"
+            print(
+                f"[paper] {underlying} {signal_type}: skipped — same-day re-buy at "
+                f"~exit price ${entry_price:.2f} (churn guard)"
             )
             actions.append(action_summary)
             continue

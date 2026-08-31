@@ -18,10 +18,10 @@
   "entry_thresholds": {
     "normal": 0.42,
     "closed_market": 0.42,
-    "keep_normal": 0.30,
+    "keep_normal": 0.3,
     "keep_closed_market": 0.22,
     "hysteresis_max_post_delta": 5,
-    "hysteresis_max_sentiment_delta": 0.20
+    "hysteresis_max_sentiment_delta": 0.2
   },
   "continuous_entry": {
     "_comment": "Replaces the binary entry gate with a sigmoid curve. size_pct = min + (max - min) / (1 + exp(-steepness * (|score| - midpoint))). At |score|=midpoint the position is 50% of full size. Scores below skip_floor get 0% (skip entirely).",
@@ -31,9 +31,9 @@
     "min_size_pct": 10.0,
     "max_size_pct": 100.0,
     "_comment_skip_floor": "Absolute directional_score below this threshold skips the signal entirely (no entry, even at min_size). Prevents micro-signals from creating noise.",
-    "skip_floor": 0.10,
+    "skip_floor": 0.1,
     "_comment_shrink_existing": "When an existing position's score stays above keep_floor, shrink proportionally instead of closing. Below keep_floor, close entirely.",
-    "keep_floor": 0.10
+    "keep_floor": 0.1
   },
   "accumulate_on_confirmation": {
     "_comment": "When enabled, re-confirmed signals (same ticker/leverage/direction) add additional shares up to max_multiplier × base_amount. The entry price is blended (weighted average).",
@@ -41,6 +41,14 @@
     "max_multiplier": 5.0
   },
   "reentry_cooldown_minutes": 120,
+  "entry_confirmation": {
+    "_comment": "Churn guard: require the SAME direction signal on N consecutive analysis runs before opening a NEW position or flipping direction. Each run updates the streak per (underlying, direction); any other direction (or a HOLD) resets it. Runs spaced more than max_gap_minutes apart also reset. HIGH conviction still requires the confirmation — the streak is the memory that prevents one 0.35-threshold blip from re-buying at the top of a 2.4% spike. Set runs_required=1 to disable.",
+    "enabled": true,
+    "runs_required": 3,
+    "max_gap_minutes": 45
+  },
+  "reentry_no_flip_minutes": 60,
+  "same_day_no_rebuy_minutes": 60,
   "opening_range": {
     "_comment": "Opening Range (ORB) guard for the regular session. wait_minutes: no NEW exposure during the first N minutes after 9:30 ET (existing positions still get stop-loss/trailing/HOLD closes). range_minutes: opening range = high/low of the first N minutes of 5m bars. min_break_pct: % beyond the range edge required to count as a 'break'. high_override: HIGH-conviction signals may enter against the break. Fail-open on price-data errors.",
     "enabled": true,
@@ -56,16 +64,24 @@
   "min_stop_loss_pct": 2.0,
   "flip_management": {
     "_comment": "Direction-flip handling. A LOW/MEDIUM conviction flip holds the position (stay the course) instead of churning out at sub-dollar P&L; only a HIGH conviction flip (or a strong-score MEDIUM flip) closes early and opens the opposite side. flip_hold_max_extension_minutes caps how far a held-through-flip window can be refreshed so a position can't run forever on repeated flips.",
-    "early_close_convictions": ["HIGH"],
-    "flip_early_close_med_score": 0.60,
+    "early_close_convictions": [
+      "HIGH"
+    ],
+    "flip_early_close_med_score": 0.6,
     "flip_hold_max_extension_minutes": 240
   },
   "tiered_profit_scaling": {
     "_comment": "Scale out of positions at multiple profit levels instead of all-at-once. Remaining position converts to tight trailing stop.",
     "enabled": true,
     "tiers": [
-      {"pnl_pct": 2.0, "sell_fraction": 0.30},
-      {"pnl_pct": 4.0, "sell_fraction": 0.30}
+      {
+        "pnl_pct": 2.0,
+        "sell_fraction": 0.3
+      },
+      {
+        "pnl_pct": 4.0,
+        "sell_fraction": 0.3
+      }
     ],
     "remainder_trailing_stop_tighten": 0.3
   },
@@ -82,8 +98,10 @@
     "medium_vol_atr_pct": 1.5
   },
   "trailing_stop": {
-    "_comment": "When a HOLD signal fires on an open position, a trailing stop is set instead of forcing a market close. Stop = best_price_seen × (1 ± stop_loss_pct × tighten_factor). Updated every run while in trailing mode.",
-    "tighten_factor": 0.5
+    "_comment": "When a HOLD signal fires on an open position, a trailing stop is set instead of forcing a market close. Stop = best_price_seen x (1 +/- stop_loss_pct x tighten_factor). Updated every run while in trailing mode.",
+    "tighten_factor": 0.5,
+    "warmup_minutes": 30,
+    "min_favorable_move_pct": 0.5
   },
   "materiality_gate": {
     "min_posts_delta": 6,
@@ -134,7 +152,7 @@
       "earnings": 0.44,
       "sector_news": 0.36,
       "noise": 0.08,
-      "default": 0.30
+      "default": 0.3
     },
     "unconfirmed_bluster_penalty": 0.15,
     "bluster_phrase_weight": 1.25,
@@ -148,20 +166,20 @@
       "BROAD": 0.4,
       "UNRELATED": 0.2
     },
-    "bluster_short_threshold": -0.70,
+    "bluster_short_threshold": -0.7,
     "short_directional_blend": {
       "bluster_weight": 0.4,
       "policy_weight": 0.6
     },
-    "policy_min_score": 0.40,
+    "policy_min_score": 0.4,
     "policy_signal_threshold": 0.45,
     "direction_confidence_min": 0.55,
     "directional_score_min_magnitude": 0.15,
-    "impact_severity_high": 0.70,
-    "impact_severity_medium": 0.40,
+    "impact_severity_high": 0.7,
+    "impact_severity_medium": 0.4,
     "bluster_detection_threshold": -0.15,
-    "policy_change_threshold": 0.40,
-    "confidence_base": 0.40,
+    "policy_change_threshold": 0.4,
+    "confidence_base": 0.4,
     "confidence_source_weight": 0.38,
     "confidence_irrelevance_penalty": 0.18,
     "confidence_unconfirmed_penalty": 0.08,
@@ -169,9 +187,9 @@
     "confidence_max": 0.91,
     "exposure_confidence_caps": {
       "DIRECT": 0.91,
-      "INDIRECT": 0.80,
-      "BROAD": 0.70,
-      "UNRELATED": 0.50
+      "INDIRECT": 0.8,
+      "BROAD": 0.7,
+      "UNRELATED": 0.5
     },
     "red_team": {
       "base_confidence": 0.58,
@@ -181,7 +199,7 @@
       "evidence_cap": 0.12,
       "risk_per_item": 0.028,
       "risk_cap": 0.14,
-      "source_bias_penalty": 0.10,
+      "source_bias_penalty": 0.1,
       "override_min_confidence": 0.58,
       "override_min_evidence_hold": 2,
       "override_min_risks_hold": 2,
@@ -222,12 +240,12 @@
       "BITO": 12
     },
     "default_hold_half_life_hours": 6,
-    "min_decay_factor": 0.10
+    "min_decay_factor": 0.1
   },
   "conviction": {
     "high_score_threshold": 0.5,
     "high_confidence_threshold": 0.8,
-    "low_directional_threshold": 0.30,
+    "low_directional_threshold": 0.3,
     "low_confidence_threshold": 0.55,
     "holding_minutes": {
       "SCALP": 120,
@@ -259,7 +277,7 @@
       "normal": 0.35,
       "closed_market": 0.35,
       "keep_normal": 0.25,
-      "keep_closed_market": 0.20
+      "keep_closed_market": 0.2
     },
     "continuous_entry": {
       "sigmoid_midpoint": 0.35,
@@ -290,8 +308,17 @@
     "_comment": "SEC EDGAR filings integration for structured company data.",
     "enabled": true,
     "poll_interval_minutes": 60,
-    "tracked_form_types": ["10-K", "10-Q", "8-K"],
-    "material_8k_items": ["2.02", "5.02", "7.01", "8.01"],
+    "tracked_form_types": [
+      "10-K",
+      "10-Q",
+      "8-K"
+    ],
+    "material_8k_items": [
+      "2.02",
+      "5.02",
+      "7.01",
+      "8.01"
+    ],
     "max_filing_chars_for_llm": 40000,
     "lookback_days_on_first_poll": 7
   },

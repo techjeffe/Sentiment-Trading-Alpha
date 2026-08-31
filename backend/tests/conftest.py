@@ -31,12 +31,14 @@ def _reset_paper_trading_state() -> Generator[None, None, None]:
             _cron_overlap_underlying_keys,
             _last_order_times,
             _opening_range_cache,
+            _confirmation_streaks,
         )
         
         _cron_overlap_keys.clear()
         _cron_overlap_underlying_keys.clear()
         _last_order_times.clear()
         _opening_range_cache.clear()
+        _confirmation_streaks.clear()
     except ImportError:
         # paper_trading not imported in this test, nothing to clean
         pass
