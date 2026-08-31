@@ -1133,6 +1133,17 @@ def update_app_config(db: Session, payload: Dict[str, Any]) -> AppConfig:
         config.reentry_cooldown_minutes = _normalize_trading_logic_int(payload.get("reentry_cooldown_minutes"), 0, 10080)
     if "min_same_day_exit_edge_pct" in payload:
         config.min_same_day_exit_edge_pct = _normalize_trading_logic_float(payload.get("min_same_day_exit_edge_pct"), 0.0, 25.0)
+    # ── Churn guards (null = use logic_config.json default) ──
+    if "entry_confirmation_runs_required" in payload:
+        config.entry_confirmation_runs_required = _normalize_trading_logic_int(payload.get("entry_confirmation_runs_required"), 1, 20)
+    if "reentry_no_flip_minutes" in payload:
+        config.reentry_no_flip_minutes = _normalize_trading_logic_int(payload.get("reentry_no_flip_minutes"), 0, 2880)
+    if "same_day_no_rebuy_minutes" in payload:
+        config.same_day_no_rebuy_minutes = _normalize_trading_logic_int(payload.get("same_day_no_rebuy_minutes"), 0, 2880)
+    if "trailing_warmup_minutes" in payload:
+        config.trailing_warmup_minutes = _normalize_trading_logic_int(payload.get("trailing_warmup_minutes"), 0, 240)
+    if "trailing_min_favorable_move_pct" in payload:
+        config.trailing_min_favorable_move_pct = _normalize_trading_logic_float(payload.get("trailing_min_favorable_move_pct"), 0.0, 5.0)
     if "alpaca_live_trading_enabled" in payload:
         config.alpaca_live_trading_enabled = _coerce_bool(payload.get("alpaca_live_trading_enabled"), False)
         config.alpaca_execution_mode = "live" if config.alpaca_live_trading_enabled else DEFAULT_ALPACA_EXECUTION_MODE
@@ -1442,6 +1453,12 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         "trail_on_window_expiry": bool(getattr(config, "trail_on_window_expiry", True)),
         "reentry_cooldown_minutes": getattr(config, "reentry_cooldown_minutes", None),
         "min_same_day_exit_edge_pct": getattr(config, "min_same_day_exit_edge_pct", None),
+        # Churn guards — null means "use JSON default"
+        "entry_confirmation_runs_required": getattr(config, "entry_confirmation_runs_required", None),
+        "reentry_no_flip_minutes": getattr(config, "reentry_no_flip_minutes", None),
+        "same_day_no_rebuy_minutes": getattr(config, "same_day_no_rebuy_minutes", None),
+        "trailing_warmup_minutes": getattr(config, "trailing_warmup_minutes", None),
+        "trailing_min_favorable_move_pct": getattr(config, "trailing_min_favorable_move_pct", None),
         # Strategy feature toggles (null = use logic_config.json default)
         "continuous_entry_enabled": getattr(config, "continuous_entry_enabled", None),
         "regime_adaptation_enabled": getattr(config, "regime_adaptation_enabled", None),
@@ -1473,6 +1490,12 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
             "materiality_min_sentiment_delta": _L["materiality_gate"]["min_sentiment_delta"],
             "reentry_cooldown_minutes": int(_L.get("reentry_cooldown_minutes", 120)),
             "min_same_day_exit_edge_pct": float(_L.get("min_same_day_exit_edge_pct", 0.5)),
+            # Churn guard defaults
+            "entry_confirmation_runs_required": int(_L.get("entry_confirmation", {}).get("runs_required", 3)),
+            "reentry_no_flip_minutes": int(_L.get("reentry_no_flip_minutes", 60)),
+            "same_day_no_rebuy_minutes": int(_L.get("same_day_no_rebuy_minutes", 60)),
+            "trailing_warmup_minutes": int(_L.get("trailing_stop", {}).get("warmup_minutes", 30)),
+            "trailing_min_favorable_move_pct": float(_L.get("trailing_stop", {}).get("min_favorable_move_pct", 0.5)),
             # Crazy profile override defaults (shown when risk_profile == "crazy" or "custom")
             "crazy": {
                 "entry_threshold": _L.get("crazy", {}).get("entry_thresholds", {}).get("normal",

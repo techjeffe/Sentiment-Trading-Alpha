@@ -39,6 +39,16 @@ _confirmation_streaks: Dict[Tuple[str, str], tuple] = {}
 
 # ── CHURN COUNTERS (for observability / logs only) ──
 _churn_blocked: Dict[str, int] = {"confirmation": 0, "no_flip": 0, "no_rebuy": 0, "trailing_warmup": 0}
+
+# ── CHURN GUARD DB OVERRIDES ──────────────────────────────────────────
+# Populated once per process_signals run from AppConfig columns (null → use
+# logic_config.json default). Keys mirror the config helpers below.
+_churn_overrides: Dict[str, Any] = {}
+
+
+def _churn_cfg(key: str, default: Any) -> Any:
+    """Resolve a churn-guard setting with DB override taking precedence."""
+    return _churn_overrides.get(key, default)
 # 24/5 trading schedule (Alpaca: Sun 8 PM ET → Fri 8 PM ET)
 _OVERNIGHT_OPEN  = time_cls(20, 0)   # 8:00 PM ET — overnight session start
 _OVERNIGHT_CLOSE = time_cls(4, 0)    # 4:00 AM ET — overnight session end
@@ -684,7 +694,7 @@ def _update_confirmation_streak(underlying: str, signal_type: str, now: datetime
     cfg = _L.get("entry_confirmation") or {}
     if not cfg.get("enabled", True):
         return 1  # disabled → always "confirmed"
-    max_gap_min = int(cfg.get("max_gap_minutes", 45))
+    max_gap_min = int(_churn_cfg("entry_confirmation_max_gap_minutes", cfg.get("max_gap_minutes", 45)))
     key = (str(underlying).upper(), str(signal_type).upper())
     prev = _confirmation_streaks.get(key)
     now_utc = _safe_utc(now)
@@ -706,7 +716,7 @@ def _confirmation_ready(underlying: str, signal_type: str, now: datetime) -> boo
     cfg = _L.get("entry_confirmation") or {}
     if not cfg.get("enabled", True):
         return True
-    required = int(cfg.get("runs_required", 3))
+    required = int(_churn_cfg("entry_confirmation_runs_required", cfg.get("runs_required", 3)))
     if required <= 1:
         return True
     # An opposing-direction signal resets that side's streak (thesis shifted).
@@ -733,7 +743,7 @@ def _no_flip_blocks_open(
     accept a signal flipping back to it within reentry_no_flip_minutes.
     """
     lg = logic_config or _L
-    noflip_min = int(lg.get("reentry_no_flip_minutes", 60))
+    noflip_min = int(_churn_cfg("reentry_no_flip_minutes", lg.get("reentry_no_flip_minutes", 60)))
     if noflip_min <= 0 or open_pos is None:
         return False
     # Only applies when the incoming signal is opposite the open position's side.
@@ -756,7 +766,7 @@ def _same_day_rebuy_blocks(
     within ~0.35% of that exit, it's a churn round-trip — skip.
     """
     from database.models import PaperTrade
-    no_rebuy_min = int(_L.get("same_day_no_rebuy_minutes", 60))
+    no_rebuy_min = int(_churn_cfg("same_day_no_rebuy_minutes", _L.get("same_day_no_rebuy_minutes", 60)))
     if no_rebuy_min <= 0 or entry_price <= 0:
         return False
     recent = (
@@ -790,8 +800,8 @@ def _trailing_warmup_blocks(open_pos, now: datetime, logic_config: dict = None) 
     """
     lg = logic_config or _L
     ts = lg.get("trailing_stop") or {}
-    warmup_min = int(ts.get("warmup_minutes", 30))
-    min_fav = float(ts.get("min_favorable_move_pct", 0.5))
+    warmup_min = int(_churn_cfg("trailing_warmup_minutes", ts.get("warmup_minutes", 30)))
+    min_fav = float(_churn_cfg("trailing_min_favorable_move_pct", ts.get("min_favorable_move_pct", 0.5)))
     if warmup_min <= 0:
         return False
     entered = _safe_utc(getattr(open_pos, "entered_at", None))
@@ -1053,6 +1063,21 @@ def process_signals(
         _app_config = _get_cfg_rc(db)
     except Exception:
         pass
+
+    # Churn-guard DB overrides (null → use logic_config.json default)
+    global _churn_overrides
+    _churn_overrides = {}
+    if _app_config is not None:
+        for _key in (
+            "entry_confirmation_runs_required",
+            "reentry_no_flip_minutes",
+            "same_day_no_rebuy_minutes",
+            "trailing_warmup_minutes",
+            "trailing_min_favorable_move_pct",
+        ):
+            _val = getattr(_app_config, _key, None)
+            if _val is not None:
+                _churn_overrides[_key] = _val
 
     # Re-entry cooldown: same-direction re-entry blocked for this many minutes after a close
     _reentry_cooldown = int(_L.get("reentry_cooldown_minutes", 0))

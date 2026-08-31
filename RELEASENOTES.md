@@ -1,3 +1,26 @@
+# Release Notes
+
+## 🛡️ Churn Guards in the Admin Console
+
+### What Changed
+- **Churn Protection controls landed in Admin → Trading Behavior.** Four new DB-backed toggles/inputs (blank = logic_config.json default):
+  - `entry_confirmation_runs_required` — consecutive same-direction runs needed before entry/flip (default 3, from `entry_confirmation`)
+  - `reentry_no_flip_minutes` — no flip-back window (default 60)
+  - `same_day_no_rebuy_minutes` — same-day re-buy at ≈ exit price guard (default 60)
+  - `trailing_warmup_minutes` + `trailing_min_favorable_move_pct` — trailing-stop arming guard (default 30 min / 0.5%)
+- Backend: 5 new nullable `app_config` columns (`migrate.py` auto-adds), normalize + serialize wiring, and `paper_trading.py` churn-guard helpers now read DB overrides (fallback to JSON).
+- Frontend: `TradingBehaviorSection` gets a **Churn Protection** panel (grid of number inputs, placeholder shows the JSON default); `config-normalizer.ts` types + empty-config defaults.
+
+### Testing
+- Backend 35 pass (churn guards + flip + opening range + paper trading). Migration adds the 5 columns to the live DB.
+- `next build` clean (2 pre-existing recharts type errors in alpha/page.tsx unaffected).
+
+### Files Changed
+- `frontend/src/components/admin/sections/TradingBehaviorSection.tsx`, `frontend/src/lib/utils/config-normalizer.ts`
+- `backend/database/models.py`, `backend/database/migrate.py`, `backend/services/app_config.py`, `backend/services/paper_trading.py`
+- `REFERENCE.md`
+
+---
 # Release Notes — 2026-08-25
 
 ## 🌅 Opening Range (ORB) Guard — Curb First-15-Minute Opening Churn

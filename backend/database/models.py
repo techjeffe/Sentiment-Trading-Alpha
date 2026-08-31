@@ -413,6 +413,12 @@ class AppConfig(Base):
     trail_on_window_expiry = Column(Boolean, nullable=False, default=True)
     reentry_cooldown_minutes = Column(Integer, nullable=True, default=None)
     min_same_day_exit_edge_pct = Column(Float, nullable=True, default=None)
+    # ── Churn guards (null = use logic_config.json default) ──
+    entry_confirmation_runs_required = Column(Integer, nullable=True, default=None)
+    reentry_no_flip_minutes = Column(Integer, nullable=True, default=None)
+    same_day_no_rebuy_minutes = Column(Integer, nullable=True, default=None)
+    trailing_warmup_minutes = Column(Integer, nullable=True, default=None)
+    trailing_min_favorable_move_pct = Column(Float, nullable=True, default=None)
 
     # ── Strategy feature toggles (null = use logic_config.json default) ─────
     continuous_entry_enabled = Column(Boolean, nullable=True, default=None)

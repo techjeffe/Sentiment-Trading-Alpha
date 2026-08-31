@@ -222,11 +222,11 @@ The backend runs `migrate.py` automatically on every startup. This table is for 
 | `best_price_seen` | `paper_trades` | `NULL` | High/low-water mark for trailing stop |
 | `trail_on_window_expiry` | `app_config` | `true` | Transition to trailing stop on window expiry |
 | `reentry_cooldown_minutes` | `app_config` | `NULL` | Block same-direction re-entry for N minutes |
-| `entry_confirmation` | `logic_config.json` | enabled; runs_required 3; gap 45m | Churn guard: require N consecutive same-direction runs before new entry/flip |
-| `reentry_no_flip_minutes` | `logic_config.json` | `60` | Block flipping back to a recently-closed direction |
-| `same_day_no_rebuy_minutes` | `logic_config.json` | `60` | Skip re-open at ≈ exit price (churn round-trip) |
-| `trailing_stop.warmup_minutes` | `logic_config.json` | `30` | Don't arm trailing stop until position matures |
-| `trailing_stop.min_favorable_move_pct` | `logic_config.json` | `0.5` | Arm trail early only after this favorable move |
+| `entry_confirmation` / `entry_confirmation_runs_required` | `logic_config.json` + `app_config` | JSON: runs 3; DB: `NULL` | Churn guard: require N consecutive same-direction runs before new entry/flip (DB override = runs count) |
+| `reentry_no_flip_minutes` | `logic_config.json` + `app_config` | JSON `60`; DB `NULL` | Block flipping back to a recently-closed direction |
+| `same_day_no_rebuy_minutes` | `logic_config.json` + `app_config` | JSON `60`; DB `NULL` | Skip re-open at ≈ exit price (churn round-trip) |
+| `trailing_stop.warmup_minutes` / `trailing_warmup_minutes` | `logic_config.json` + `app_config` | JSON `30`; DB `NULL` | Don't arm trailing stop until position matures |
+| `trailing_stop.min_favorable_move_pct` / `trailing_min_favorable_move_pct` | `logic_config.json` + `app_config` | JSON `0.5`; DB `NULL` | Arm trail early only after this favorable move |
 | `opening_range` | `logic_config.json` | enabled; wait 15m; range 15m; break 0.2% | ORB guard: skip new exposure during opening wait, block entries against the opening break |
 | `min_same_day_exit_edge_pct` | `app_config` | `NULL` | Minimum profit edge before closing same-day winner |
 | `alpaca_live_trading_enabled` | `app_config` | `false` | Master kill switch for real-money orders |

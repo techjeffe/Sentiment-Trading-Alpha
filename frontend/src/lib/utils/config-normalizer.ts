@@ -61,6 +61,12 @@ export type AppConfig = {
     trail_on_window_expiry: boolean;
     reentry_cooldown_minutes: number | null;
     min_same_day_exit_edge_pct: number | null;
+    // ── Churn guards (null = use logic_config.json default) ──
+    entry_confirmation_runs_required: number | null;
+    reentry_no_flip_minutes: number | null;
+    same_day_no_rebuy_minutes: number | null;
+    trailing_warmup_minutes: number | null;
+    trailing_min_favorable_move_pct: number | null;
     remote_snapshot_enabled: boolean;
     telegram_remote_control_enabled: boolean;
     telegram_remote_control_banner_active: boolean;
@@ -92,6 +98,11 @@ export type AppConfig = {
         materiality_min_sentiment_delta: number;
         reentry_cooldown_minutes: number;
         min_same_day_exit_edge_pct: number;
+        entry_confirmation_runs_required: number;
+        reentry_no_flip_minutes: number;
+        same_day_no_rebuy_minutes: number;
+        trailing_warmup_minutes: number;
+        trailing_min_favorable_move_pct: number;
         crazy?: {
             entry_threshold: number;
             stop_loss_pct: number;
@@ -199,6 +210,11 @@ export const EMPTY_CONFIG: AppConfig = {
     trail_on_window_expiry: true,
     reentry_cooldown_minutes: null,
     min_same_day_exit_edge_pct: null,
+    entry_confirmation_runs_required: null,
+    reentry_no_flip_minutes: null,
+    same_day_no_rebuy_minutes: null,
+    trailing_warmup_minutes: null,
+    trailing_min_favorable_move_pct: null,
     continuous_entry_enabled: null,
     regime_adaptation_enabled: null,
     hold_decay_enabled: null,
@@ -228,6 +244,11 @@ export const EMPTY_CONFIG: AppConfig = {
         materiality_min_sentiment_delta: 0.24,
         reentry_cooldown_minutes: 120,
         min_same_day_exit_edge_pct: 0.5,
+        entry_confirmation_runs_required: 3,
+        reentry_no_flip_minutes: 60,
+        same_day_no_rebuy_minutes: 60,
+        trailing_warmup_minutes: 30,
+        trailing_min_favorable_move_pct: 0.5,
     },
     available_models: [],
     local_models: [],
