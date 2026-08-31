@@ -113,6 +113,7 @@ def migrate():
             ("edgar_filings_poll_interval_minutes", "INTEGER"),
             ("edgar_filings_tracked_form_types", "JSON"),
             ("edgar_filings_material_8k_items", "JSON"),
+            ("execution_rules_json", "TEXT"),
         ]:
             if column_name not in existing_cols:
                 print(f"Adding {column_name} to app_config...")

@@ -27,6 +27,9 @@ from services.runtime_health import record_analysis_result
 from services.paper_trading import process_signals as paper_process_signals
 from services.pnl_tracker import persist_recommendation_trades
 from services.remote_snapshot import trigger_remote_snapshot_delivery
+from services.regime import market_regime_from_price_context
+from services.rolling_ic import fetch_sizing_ic
+from database.engine import DecisionLogSessionLocal
 from services.app_config import (
     get_or_create_app_config,
     DEFAULT_SNAPSHOT_RETENTION_LIMIT,
@@ -400,6 +403,11 @@ class PersistenceService:
 
                 # Build paper trading entries from final recommendations
                 covered_syms: set = set()
+                # Market regime classified once per save (QQQ/SPY indicators).
+                try:
+                    _market_regime = market_regime_from_price_context(price_context)
+                except Exception:
+                    _market_regime = "unknown"
                 for rec in recs_by_underlying.values():
                     underlying = str(rec.get("underlying_symbol") or "").upper()
                     if not underlying:
@@ -428,6 +436,29 @@ class PersistenceService:
                             _atr_pct = float(_indicators.get("atr_14_pct") or 0.0)
                         except (TypeError, ValueError):
                             _atr_pct = 0.0
+
+                    # Market regime (choppy/trending/unknown) from the primary
+                    # market symbols — paper_trading uses it for the 3x
+                    # overnight de-risk gate. Computed once per save call.
+                    _regime = _market_regime
+
+                    # Trailing rolling IC for this symbol (confidence → realized
+                    # 1d return). Sizes the position in paper_trading
+                    # (vol_sizing.ic_scaling) and feeds the de-risk exemption.
+                    # Never raises; missing decision-log history degrades to
+                    # ic_score=None / ic_strong=False (fail-closed on derisk).
+                    _ic_score, _ic_strong = None, False
+                    try:
+                        _dl = DecisionLogSessionLocal()
+                        try:
+                            _ic_pkg = fetch_sizing_ic(_dl, db, underlying)
+                            _ic_score = _ic_pkg.get("ic_score")
+                            _ic_strong = bool(_ic_pkg.get("ic_strong"))
+                        finally:
+                            _dl.close()
+                    except Exception:
+                        pass
+
                     recs_for_paper.append({
                         "underlying": underlying,
                         "execution_ticker": str(rec.get("symbol", underlying) or underlying).upper(),
@@ -438,6 +469,9 @@ class PersistenceService:
                         "holding_minutes": _hold_mins,
                         "atr_pct": _atr_pct,
                         "size_pct": str(rec.get("size_pct", "100.0") or "100.0"),
+                        "regime": _regime,
+                        "ic_score": _ic_score,
+                        "ic_strong": _ic_strong,
                     })
 
                 # Add HOLD entries for any analyzed symbols that didn't get a final

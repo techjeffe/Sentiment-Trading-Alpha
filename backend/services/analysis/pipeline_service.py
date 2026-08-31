@@ -63,6 +63,11 @@ class PipelineService:
         self._price_cache = price_cache
         self._L = logic_config
 
+        # Refresh Admin execution-rules overrides (regime_filter, derisk,
+        # cooldown, run-length, ic_scaling) so a UI save applies this run.
+        from services.regime import refresh_rule_overrides
+        refresh_rule_overrides(db)
+
         # Compose child services (dependency tree: unidirectional)
         self._sentiment = SentimentService(price_cache=price_cache, logic_config=logic_config)
         self._market = MarketDataService(price_cache=price_cache, logic_config=logic_config)

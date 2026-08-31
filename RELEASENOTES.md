@@ -1,5 +1,48 @@
 # Release Notes
 
+## 🎛️ Execution Rules in the Admin Console (UI for the 4-rule refinement set)
+
+### What Changed
+- **New "Execution Rules" admin section** (sidebar: Executions Rules → separate from Trading + Execution). One screen for the whipsaw/leverage rules: **Regime Filter**, **Overnight 3x De-Risk**, **Counter-Trend Cooldown**, **Run-Length Protection**, and **IC-Based Sizing** — each block has a description, hover tooltips (`?` badges) on every field, and an *Override defaults* toggle. Blank a field to fall back to its logic_config.json default; a badge shows how many blocks are overridden.
+- **Storage: one `execution_rules_json` column on app_config** (Text, nullable, auto-added by `migrate.py`). Shape: partial per-section overrides (`{"regime_filter": {"enabled": false}, ...}`). `update_app_config` whitelists keys (unknown sections/keys dropped); `config_to_dict` serializes the blob + JSON defaults for placeholders.
+- **Runtime merge**: `services/regime.refresh_rule_overrides(db)` loads the blob and merges over the logic_config.json defaults into a process-wide cache; `effective_rule(section, key, default)` is now the read path for `_resolve_leverage`, the overnight de-risk gate, counter-trend cooldown, run-length protection, and IC scaling (paper_trading / signal_service / rolling_ic). Refreshed at pipeline start and at `process_signals` — an Admin save takes effect on the next analysis run, no restart.
+- ponytail: the cache is process-wide + refresh-on-run, correct for the single-container deployment; revisit if the pipeline moves to a separate worker process.
+
+### Testing
+- New `test_execution_rules_admin.py` (4): blob whitelist round-trip, null-clear, serialization, and override→runtime merge. Full backend suite green (173 pass; 2 pre-existing `praw` env failures). `next build` clean.
+
+### Files Changed
+- New: `frontend/src/components/admin/sections/ExecutionRulesSection.tsx`, `backend/tests/test_execution_rules_admin.py`
+- `frontend/src/app/admin/page.tsx`, `frontend/src/lib/utils/config-normalizer.ts`
+- `backend/database/models.py`, `backend/database/migrate.py`, `backend/services/app_config.py`, `backend/services/regime.py`, `backend/services/paper_trading.py`, `backend/services/analysis/signal_service.py`, `backend/services/analysis/pipeline_service.py`, `backend/services/rolling_ic.py`
+
+---
+
+## ⚙️ Execution Refinement — Regime Throttle, Overnight 3x De-Risk, Whipsaw & Dust Guards
+
+### What Changed
+- **Regime filter for 3x ETFs.** New `regime_filter` block in `logic_config.json`. `services/regime.py` classifies the market (QQQ/SPY indicators) as choppy when the 50/200 MA spread is tight or ATR is elevated with no trend; `signal_service._resolve_leverage` downshifts entries from 3x (TQQQ/SPXL/SQQQ/SPXS) to 2x (QLD/SSO/QID/SDS) in that regime. Unknown regime fails open (no throttling). Existing 3x positions convert through the existing ticker-leverage-change path.
+- **Mandatory overnight de-risk for 3x.** New `overnight_derisk` block: after `start_et` (15:00 ET), any open 3x position is force-liquidated before close unless conviction is HIGH **and** the symbol's trailing rolling IC clears its own 90th-percentile bar (`ic_strong`, new `services/rolling_ic.py` reading decision-log confidence vs. realized returns). New 3x entries are blocked after the start time. Missing IC evidence never exempts (fail-closed).
+- **Conviction-based dynamic sizing.** `vol_sizing.ic_scaling` multiplies the conviction scalar by `clamp(1 + ic*sensitivity, 0.85, 1.2)`; `persistence_service` attaches per-symbol trailing IC + regime to every paper rec.
+- **Run-length protection for single-stock swings.** New `run_length_protection` block: HIGH-conviction equities (NOW/NET/NVDA-style, excluding the ETF families in `INSTRUMENT_SPECS`) convert to a widened ATR trailing stop on take-profit breach instead of the fixed 3% close, letting momentum compound.
+- **Counter-trend cooldown.** New `counter_trend_cooldown` block: 2 consecutive stop-outs in one direction within 5 days ⇒ 72h signal-generation cool-off for that symbol+direction.
+- **Order/dust guardrails.** Broker dispatch skips opens under `min_trade_size_usd` and suppresses redundant market opens within a 120s DB-backed window (`alpaca_orders.created_at`), process-safe across restarts.
+- Backtest/perturbation verification: `VectorBTBacktester.backtest(regime_filter=...)` masks choppy windows; `optimization.max_day_trades_in_rolling_window` (PDT helper); `run_perturbation` reports a same-symbol opposite-direction churn proxy. (The installed vectorbt 1.0 dropped the v0.x `Positions.from_dataframe` API, so the verification tests run a self-contained pandas harness that applies the identical regime mask — engine migration is tracked separately.)
+
+### Testing
+- New `backend/tests/test_regime_and_execution_rules.py` (22) + `backend/tests/test_backtest_leverage_regime.py` (4) — all pass; existing paper-trading / churn / flip / leverage suites stay green (169 pass; 2 pre-existing `praw` env failures).
+
+### Config Changes
+- `logic_config.json`: new `regime_filter`, `overnight_derisk`, `counter_trend_cooldown`, `run_length_protection` blocks; `vol_sizing.ic_scaling`. All thresholds live in config — nothing hardcoded.
+
+### Files Changed
+- `backend/services/regime.py` (new), `backend/services/rolling_ic.py` (new)
+- `backend/services/paper_trading.py`, `backend/services/analysis/signal_service.py`, `backend/services/analysis/persistence_service.py`, `backend/services/analysis/stream_service.py`, `backend/routers/analysis.py`
+- `backend/services/analysis/perturbation.py`, `backend/services/backtesting/optimization.py`, `backend/services/backtesting/vectorbt_engine.py`, `backend/config/logic_config.json`
+- `backend/tests/test_regime_and_execution_rules.py` (new), `backend/tests/test_backtest_leverage_regime.py` (new)
+
+---
+
 ## 🛡️ Churn Guards in the Admin Console
 
 ### What Changed

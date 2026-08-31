@@ -88,6 +88,8 @@ export type AppConfig = {
     continuous_entry_enabled: boolean | null;
     regime_adaptation_enabled: boolean | null;
     hold_decay_enabled: boolean | null;
+    // Execution rules overrides (JSON blob; null = all blocks use defaults)
+    execution_rules_json: string | null;
 
     logic_defaults: {
         paper_trade_amount: number;
@@ -103,6 +105,40 @@ export type AppConfig = {
         same_day_no_rebuy_minutes: number;
         trailing_warmup_minutes: number;
         trailing_min_favorable_move_pct: number;
+        execution_rules: {
+            regime_filter: {
+                enabled: boolean;
+                chop_ma_spread_pct: number;
+                chop_atr_pct: number;
+                choppy_leverage_cap: number;
+            };
+            overnight_derisk: {
+                enabled: boolean;
+                start_et: string;
+                require_ic_strong: boolean;
+                exempt_convictions: string[];
+            };
+            counter_trend_cooldown: {
+                enabled: boolean;
+                stop_out_window_days: number;
+                required_consecutive_stopouts: number;
+                cooldown_hours: number;
+            };
+            run_length_protection: {
+                enabled: boolean;
+                convictions: string[];
+                trail_buffer_atr_mult: number;
+                min_trail_pct: number;
+                max_trail_pct: number;
+            };
+            ic_scaling: {
+                enabled: boolean;
+                sensitivity: number;
+                min_multiplier: number;
+                max_multiplier: number;
+                strong_pct: number;
+            };
+        };
         crazy?: {
             entry_threshold: number;
             stop_loss_pct: number;
@@ -218,6 +254,7 @@ export const EMPTY_CONFIG: AppConfig = {
     continuous_entry_enabled: null,
     regime_adaptation_enabled: null,
     hold_decay_enabled: null,
+    execution_rules_json: null,
     remote_snapshot_enabled: false,
     telegram_remote_control_enabled: false,
     telegram_remote_control_banner_active: false,
@@ -249,6 +286,13 @@ export const EMPTY_CONFIG: AppConfig = {
         same_day_no_rebuy_minutes: 60,
         trailing_warmup_minutes: 30,
         trailing_min_favorable_move_pct: 0.5,
+        execution_rules: {
+            regime_filter: { enabled: true, chop_ma_spread_pct: 1.0, chop_atr_pct: 2.5, choppy_leverage_cap: 2 },
+            overnight_derisk: { enabled: true, start_et: "15:00", require_ic_strong: true, exempt_convictions: ["HIGH"] },
+            counter_trend_cooldown: { enabled: true, stop_out_window_days: 5, required_consecutive_stopouts: 2, cooldown_hours: 72 },
+            run_length_protection: { enabled: true, convictions: ["HIGH"], trail_buffer_atr_mult: 1.5, min_trail_pct: 3.0, max_trail_pct: 8.0 },
+            ic_scaling: { enabled: true, sensitivity: 0.5, min_multiplier: 0.85, max_multiplier: 1.2, strong_pct: 90.0 },
+        },
     },
     available_models: [],
     local_models: [],
@@ -341,6 +385,7 @@ export function normalizeConfigPayload(payload: Partial<AppConfig> | null | unde
         risk_policy: next.risk_policy ?? EMPTY_CONFIG.risk_policy,
         telegram_remote_control_banner_active: !!next.telegram_remote_control_banner_active,
         telegram_remote_control_banner_message: String(next.telegram_remote_control_banner_message || ""),
+        execution_rules_json: next.execution_rules_json ?? null,
         telegram_remote_control_banner_updated_at: next.telegram_remote_control_banner_updated_at || null,
         available_models: Array.isArray(next.available_models) ? next.available_models : [],
         local_models: Array.isArray(next.local_models) ? next.local_models : [],
