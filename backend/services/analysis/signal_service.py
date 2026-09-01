@@ -16,6 +16,7 @@ from schemas.analysis import RedTeamDebug, RedTeamReview, TradingSignal
 from services.sentiment.engine import SentimentEngine
 from services.trading_instruments import build_execution_recommendation
 from services.trading_instruments import INSTRUMENT_SPECS
+from services.regime import market_regime_from_price_context
 from services.data_ingestion.yfinance_client import PriceClient
 
 
@@ -301,6 +302,7 @@ class SignalService:
                 risk_profile,
                 action=action,
                 atr_pct=self._symbol_atr_pct(sym, price_context),
+                regime=market_regime_from_price_context(price_context),
             )
             recommendation = None
             if action:
@@ -494,6 +496,7 @@ class SignalService:
         red_team_review: Optional[RedTeamReview],
         quotes_by_symbol: Optional[Dict[str, Dict[str, Any]]] = None,
         risk_profile: str = "moderate",
+        regime: Optional[str] = None,
     ) -> TradingSignal:
         """Combine the blue-team signal with the red-team review."""
         if not red_team_review or not red_team_review.symbol_reviews:
@@ -564,7 +567,7 @@ class SignalService:
             if not action or not symbol:
                 continue
 
-            leverage = self._resolve_leverage(adjusted_confidence, risk_profile, action=action)
+            leverage = self._resolve_leverage(adjusted_confidence, risk_profile, action=action, regime=regime)
             recommendation = build_execution_recommendation(symbol, action, leverage)
             # Pass through size_pct from blue team recommendation if not overridden
             blue_rec = blue_rec_map.get(symbol) or {}
@@ -855,7 +858,7 @@ class SignalService:
         parts = [part for part in [action, symbol, leverage] if part]
         return " ".join(parts)
 
-    def _resolve_leverage(self, confidence: float, risk_profile: str, action: str = "", atr_pct: float = 0.0) -> str:
+    def _resolve_leverage(self, confidence: float, risk_profile: str, action: str = "", atr_pct: float = 0.0, regime: Optional[str] = None) -> str:
         profile = str(risk_profile or "standard").lower().strip()
         if profile in {"moderate", "aggressive"}:
             profile = "standard"
@@ -878,6 +881,13 @@ class SignalService:
             cap = 2
         else:
             cap = 3
+
+        # Regime filter: a choppy market (tight MA cluster / elevated ATR with
+        # no trend on QQQ/SPY) throttles 3x ETFs down to the configured cap
+        # (default 2x → QLD/SSO/QID/SDS instead of TQQQ/SPXL/SQQQ/SPXS).
+        from services.regime import regime_leverage_cap, effective_rule
+        if effective_rule("regime_filter", "enabled", True):
+            cap = regime_leverage_cap(str(regime or ""), cap)
 
         return f"{min(raw, cap)}x"
 

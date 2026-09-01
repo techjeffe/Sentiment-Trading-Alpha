@@ -77,7 +77,8 @@ class VectorBTBacktester:
         prices: pd.Series,
         signals: pd.Series,
         entry_prices: Optional[pd.Series] = None,
-        exit_prices: Optional[pd.Series] = None
+        exit_prices: Optional[pd.Series] = None,
+        regime_filter: bool = False,
     ) -> BacktestResult:
         """
         Run backtest on price data with signals.
@@ -93,6 +94,18 @@ class VectorBTBacktester:
         """
         if len(prices) < self.lookback_days + 1:
             raise ValueError(f"Insufficient data: need at least {self.lookback_days + 1} days")
+
+        if regime_filter:
+            from services.regime import classify_regime_from_prices
+            _mask = pd.Series(
+                [
+                    classify_regime_from_prices(prices.iloc[max(0, i - 30) : i]) != "choppy"
+                    for i in range(len(prices))
+                ],
+                index=prices.index,
+            )
+            signals = signals.mask(~_mask, 0)
+
         
         # Generate entry/exit signals from price changes
         if entry_prices is None or exit_prices is None:

@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional, Dict, Any, List, Tuple
 
 from config.logic_loader import LOGIC as _L
+from services.regime import effective_rule, refresh_rule_overrides
 
 _MARKET_TZ = ZoneInfo("America/New_York")
 
@@ -886,16 +887,29 @@ def _get_alpaca_system_open_exposure(broker, db, app_config=None) -> Optional[fl
         return None
 
 
+def _leverage_int(label: str) -> int:
+    """'3x' → 3, '1x' → 1, garbage → 1."""
+    try:
+        return max(1, int(float(str(label or "1x").lower().replace("x", ""))))
+    except ValueError:
+        return 1
+
+
 def _compute_vol_normalized_amount(
     base_amount: float,
     conviction_level: str,
     atr_pct: float,
+    ic_score: Optional[float] = None,
 ) -> float:
     """
     Compute position size using volatility targeting.
 
     Formula: size = (target_daily_vol_pct/100 * base) / (atr_14d_pct/100)
     Scaled by conviction level, then clamped to [min_mult, max_mult] × base.
+    When ic_score is provided (trailing rolling IC for the symbol), a further
+    multiplier clamp(1 + ic*sensitivity, min_ic_mult, max_ic_mult) is applied:
+    positive IC means the symbol's historical confidence→return edge is real, so
+    we allocate more; negative IC pulls size down (vol_sizing.ic_scaling).
 
     When ATR is unavailable (0), falls back to conviction-scaled base amount.
     """
@@ -915,7 +929,176 @@ def _compute_vol_normalized_amount(
         vol_size = base_amount
 
     scaled = vol_size * conviction_scalar
+
+    # Rolling-IC multiplier (conviction-based dynamic sizing)
+    if ic_score is not None:
+        if effective_rule("ic_scaling", "enabled", True):
+            try:
+                sens = float(effective_rule("ic_scaling", "sensitivity", 0.5))
+                lo = float(effective_rule("ic_scaling", "min_multiplier", 0.85))
+                hi = float(effective_rule("ic_scaling", "max_multiplier", 1.2))
+                scaled *= max(lo, min(hi, 1.0 + float(ic_score) * sens))
+            except (TypeError, ValueError):
+                pass
+
     return round(max(base_amount * min_mult, min(base_amount * max_mult, scaled)), 2)
+
+
+def _counter_trend_cooldown_blocks(
+    underlying: str,
+    signal_type: str,
+    now: datetime,
+    db,
+) -> bool:
+    """
+    Slippage safeguard: after `required_consecutive_stopouts` stopped-out
+    trades in the same direction within `stop_out_window_days`, block new
+    signal generation for `cooldown_hours`. A non-stop-out close (e.g.
+    take-profit) between two stop-outs resets the consecutive chain.
+    """
+    cfg = _L.get("counter_trend_cooldown", {})
+    if not effective_rule("counter_trend_cooldown", "enabled", False):
+        return False
+    window_days = int(effective_rule("counter_trend_cooldown", "stop_out_window_days", 5))
+    required = int(effective_rule("counter_trend_cooldown", "required_consecutive_stopouts", 2))
+    cooldown_hours = int(effective_rule("counter_trend_cooldown", "cooldown_hours", 72))
+    stop_reasons = {str(r) for r in cfg.get("stop_out_reasons", ["stop_loss_hit", "trailing_stop_hit"])}
+
+    from database.models import PaperTrade
+    recent = (
+        db.query(PaperTrade)
+        .filter(
+            PaperTrade.underlying == str(underlying or "").upper(),
+            PaperTrade.signal_type == str(signal_type or "").upper(),
+            PaperTrade.exited_at.isnot(None),
+        )
+        .order_by(PaperTrade.exited_at.desc())
+        .limit(required + 1)
+        .all()
+    )
+    window_start = _safe_utc(now) - timedelta(days=window_days)
+    consecutive_stopouts = 0
+    newest_stopout: Optional[datetime] = None  # anchor = most recent exit in the chain
+    for p in recent:
+        ex = _safe_utc(p.exited_at)
+        if ex is None or ex < window_start:
+            break
+        if str(getattr(p, "close_reason", "") or "") in stop_reasons:
+            if consecutive_stopouts == 0:
+                newest_stopout = ex  # newest stop-out anchors the 72h cool-off
+            consecutive_stopouts += 1
+            if consecutive_stopouts >= required:
+                return _safe_utc(now) < newest_stopout + timedelta(hours=cooldown_hours)
+        else:
+            # A profitable/other-direction close resets the chain
+            break
+    return False
+
+
+def _overnight_derisk_rec_has_context(rec: Dict[str, Any]) -> bool:
+    """
+    The 3x time-stop only engages on recommendations produced by the real
+    pipeline, which always carry the regime + rolling-IC context fields.
+    Hand-built recs (tests, manual hooks) without that context never trigger
+    the forced liquidation.
+    """
+    return "regime" in rec or "ic_strong" in rec or "ic_score" in rec
+
+
+def _overnight_derisk_blocks(open_pos, rec, now: datetime) -> bool:
+    """
+    Mandatory intraday time-stop: any open 3x position after
+    overnight_derisk.start_et ET is force-liquidated before the close unless
+    BOTH conviction is in exempt_convictions AND the rolling IC clears its
+    90th-percentile bar (ic_strong). Missing IC evidence never exempts.
+    """
+    if not _overnight_derisk_rec_has_context(rec):
+        return False
+    if open_pos is None or _leverage_int(getattr(open_pos, "leverage", "1x")) < 3:
+        return False
+    from services.regime import overnight_derisk_required
+    return overnight_derisk_required(
+        now,
+        str(getattr(open_pos, "leverage", "1x") or "1x"),
+        str(rec.get("conviction_level") or ""),
+        bool(rec.get("ic_strong")),
+        _MARKET_TZ,
+    )
+
+
+def _new_entry_derisk_gate(rec: Dict[str, Any], now: datetime) -> bool:
+    """Block a NEW 3x entry once the overnight de-risk window has started."""
+    if not _overnight_derisk_rec_has_context(rec):
+        return False
+    if _leverage_int(str(rec.get("leverage") or "1x")) < 3:
+        return False
+    from services.regime import overnight_derisk_required
+    return overnight_derisk_required(
+        now,
+        str(rec.get("leverage") or "1x"),
+        str(rec.get("conviction_level") or ""),
+        bool(rec.get("ic_strong")),
+        _MARKET_TZ,
+    )
+
+
+def _apply_run_length_trail(
+    pos,
+    current_price: float,
+    atr_pct: float,
+    take_profit_pct: float,
+    now: datetime,
+    logic_config: dict,
+) -> bool:
+    """
+    Run-length protection for high-conviction single-stock swing winners: on a
+    take-profit breach, convert the position to a widened ATR trailing stop
+    instead of hard-closing at the fixed take_profit_pct.
+
+    Returns True when the position was converted (caller reports 'trailing'
+    instead of 'take_profit_hit'). Buffer = max(take_profit_pct, atr*mult)
+    clamped to [min_trail_pct, max_trail_pct]. Only applies to convictions in
+    cfg.convictions on underlyings NOT in the leveraged ETF families
+    (INSTRUMENT_SPECS) — leveraged vehicles keep the fixed take-profit.
+    """
+    cfg = logic_config.get("run_length_protection", {})
+    if not effective_rule("run_length_protection", "enabled", False):
+        return False
+    conviction = str(getattr(pos, "conviction_level", "") or "").upper()
+    allowed = {str(c).upper() for c in effective_rule("run_length_protection", "convictions", ["HIGH"])}
+    if conviction not in allowed:
+        return False
+    underlying = str(getattr(pos, "underlying", "") or "").upper()
+    from services.trading_instruments import INSTRUMENT_SPECS
+    if underlying in INSTRUMENT_SPECS:
+        return False
+    if current_price <= 0:
+        return False
+
+    atr_pct = float(atr_pct or 0.0)
+    buffer = (atr_pct * float(effective_rule("run_length_protection", "trail_buffer_atr_mult", 1.5))) if atr_pct > 0 else 0.0
+    buffer = max(buffer, float(effective_rule("run_length_protection", "min_trail_pct", take_profit_pct)))
+    buffer = min(buffer, float(effective_rule("run_length_protection", "max_trail_pct", 8.0)))
+
+    if str(getattr(pos, "signal_type", "LONG") or "LONG").upper() == "LONG":
+        best = max(float(pos.best_price_seen or 0) or float(pos.entry_price or 0), current_price)
+        new_stop = round(best * (1.0 - buffer / 100.0), 4)
+    else:
+        cur_best = float(pos.best_price_seen or 0)
+        best = min(cur_best, current_price) if cur_best > 0 else current_price
+        new_stop = round(best * (1.0 + buffer / 100.0), 4)
+
+    pos.best_price_seen = best
+    pos.trailing_stop_price = new_stop
+    # Give the winner runway: extend the window to the max holding time for the
+    # position's trading type so a trailing HOLD keeps it alive.
+    _cv = logic_config.get("conviction", {})
+    _max_mins = _cv.get("max_holding_minutes", {}).get(
+        str(getattr(pos, "trading_type", "SWING") or "SWING").upper(), 2160
+    )
+    pos.holding_window_until = _safe_utc(now) + timedelta(minutes=_max_mins)
+    return True
+
 
 
 def close_expired_positions(db, alpaca_pending: Optional[list] = None) -> List[Dict[str, Any]]:
@@ -1055,6 +1238,11 @@ def process_signals(
     from database.models import PaperTrade
 
     _cv = _L["conviction"]
+
+    # Refresh Admin execution-rules overrides (regime_filter, overnight_derisk,
+    # counter_trend_cooldown, run_length_protection, ic_scaling) from
+    # AppConfig.execution_rules_json so a UI save takes effect this run.
+    refresh_rule_overrides(db)
 
     # Load app config once — used for re-entry cooldown and Alpaca dispatch
     _app_config = None
@@ -1382,6 +1570,41 @@ def process_signals(
                     })
                 db.commit()
 
+        # ── Overnight de-risk (mandatory 3x time-stop) ──────────────────
+        # After overnight_derisk.start_et ET, any open 3x position is force-
+        # liquidated before the close unless BOTH conviction is exempt (HIGH)
+        # AND the trailing rolling IC clears its 90th-percentile bar
+        # (ic_strong). Runs for HOLD and directional signals alike, before the
+        # HOLD/trailing paths can keep the position open overnight. Overnight
+        # hold decay on 3x instruments (TQQQ/SQQQ/SPXL/SPXS) is the whole
+        # point of the rule.
+        if _overnight_derisk_blocks(open_pos, rec, now):
+            _derisk_px = _resolve_position_market_price(open_pos, quotes_by_symbol)
+            if _derisk_px <= 0:
+                _derisk_px = float(open_pos.entry_price or 0)
+            _close_position(open_pos, _derisk_px, now, db, reason="overnight_derisk_3x")
+            _alpaca_pending.append((open_pos, "close"))
+            # Dedicated dict — the shared action_summary is mutated downstream
+            # by the HOLD branch and would clobber this reason.
+            actions.append({
+                "underlying": underlying,
+                "execution_ticker": execution_ticker,
+                "signal_type": signal_type,
+                "leverage": leverage,
+                "conviction_level": conviction_level,
+                "trading_type": trading_type,
+                "session": session["label"],
+                "closed_pnl": open_pos.realized_pnl,
+                "exit_price": _derisk_px,
+                "action": "closed",
+                "reason": "overnight_derisk_3x",
+            })
+            print(
+                f"[paper] {underlying}: 3x position force-closed before close "
+                f"(overnight de-risk, {now.astimezone(_MARKET_TZ).strftime('%H:%M')} ET)"
+            )
+            open_pos = None
+
         # ── HOLD signal ───────────────────────────────────────────────────────
         if signal_type == "HOLD":
             # Data gap protection: when article count dropped significantly,
@@ -1539,7 +1762,7 @@ def process_signals(
                 # Compute the new desired size from the signal's size_pct
                 _new_size_pct = float(rec.get("size_pct", "100.0") or "100.0") / 100.0
                 _new_suggested = _compute_vol_normalized_amount(
-                    _base_amount, conviction_level, _atr_pct
+                    _base_amount, conviction_level, _atr_pct, ic_score=rec.get("ic_score")
                 ) * _new_size_pct
 
                 # Apply ramp stage cap; also update position's stage if promoted
@@ -1698,6 +1921,29 @@ def process_signals(
                     actions.append(action_summary)
                     continue
                 if _take_profit > 0 and _pnl_pct >= _take_profit:
+                    # Run-length protection: high-conviction single-stock swing
+                    # winners convert to a widened ATR trailing stop instead of
+                    # hard-closing at the fixed take-profit, letting the trend
+                    # compound (NOW/NET/NVDA-style multi-week moves).
+                    _trail_atr_pct = 0.0
+                    try:
+                        _tp_quote = quotes_by_symbol.get(open_pos.execution_ticker) or quotes_by_symbol.get(underlying) or {}
+                        _trail_atr_pct = float((_tp_quote.get("technical_indicators") or {}).get("atr_14_pct") or 0.0)
+                    except (TypeError, ValueError):
+                        _trail_atr_pct = 0.0
+                    if _apply_run_length_trail(open_pos, existing_pos_price, _trail_atr_pct, _take_profit, now, _L):
+                        action_summary["action"] = "trailing"
+                        action_summary["reason"] = "run_length_protection"
+                        action_summary["trailing_stop_price"] = open_pos.trailing_stop_price
+                        action_summary["best_price_seen"] = open_pos.best_price_seen
+                        action_summary["holding_window_until"] = _utc_iso(open_pos.holding_window_until)
+                        print(
+                            f"[paper] {underlying}: take-profit breached at {_pnl_pct:.2f}% — "
+                            f"converted to ATR trailing stop @ {open_pos.trailing_stop_price} "
+                            f"(run-length protection)"
+                        )
+                        actions.append(action_summary)
+                        continue
                     _close_position(open_pos, existing_pos_price, now, db, reason="take_profit_hit")
                     action_summary["closed_pnl"] = open_pos.realized_pnl
                     action_summary["exit_price"] = existing_pos_price
@@ -1840,6 +2086,22 @@ def process_signals(
             actions.append(action_summary)
             continue
 
+        # ── Counter-trend cooldown (two stop-outs in 5d → 72h cool-off) ──
+        # Slippage safeguard for persistent counter-trend whipsaws (USO/BITU
+        # during macro downtrends): blocking signal generation for this
+        # symbol+direction after consecutive stopped-out trades in the same
+        # direction. A non-stop-out close resets the chain.
+        if _counter_trend_cooldown_blocks(underlying, signal_type, now, db):
+            action_summary["action"] = "skipped"
+            action_summary["reason"] = "counter_trend_cooldown"
+            print(
+                f"[paper] {underlying} {signal_type}: skipped — counter-trend cooldown "
+                f"({_L.get('counter_trend_cooldown', {}).get('required_consecutive_stopouts', 2)} "
+                f"consecutive stop-outs in {_L.get('counter_trend_cooldown', {}).get('stop_out_window_days', 5)}d)"
+            )
+            actions.append(action_summary)
+            continue
+
         # ── Entry threshold gate ──
         # (directional signals only — HOLD signals skip this)
         # We gate on conviction_level: only HIGH conviction gets an automatic pass.
@@ -1851,18 +2113,26 @@ def process_signals(
         if getattr(_app_config, "alpaca_fixed_order_size", False):
             _amount = _base_amount
         else:
-            _amount = _compute_vol_normalized_amount(_base_amount, conviction_level, _atr_pct)
+            _amount = _compute_vol_normalized_amount(_base_amount, conviction_level, _atr_pct, ic_score=rec.get("ic_score"))
 
         # Apply continuous entry size_pct scaling (sigmoid allocation)
         _size_pct = float(rec.get("size_pct", "100.0") or "100.0") / 100.0
         _amount *= _size_pct
 
-        # ── Minimum initial entry floor ─────────────────────────────
-        # The initial entry must be at least 25% of the base amount to
-        # avoid wasting fees on sub-penny dust positions.  Ramp stage
-        # controls accumulation (how much you add on), NOT the first
-        # entry.  Only apply ramp_cap when we are adding to an existing
-        # position (handled in the accumulation block below).
+        # ── Overnight de-risk gate for NEW entries ─────────────────────
+        # No fresh 3x exposure after the de-risk start time: a 3x scalp opened
+        # late in the day would otherwise ride overnight decay until the next
+        # run liquidates it (and may never get another run before close).
+        if _new_entry_derisk_gate(rec, now):
+            action_summary["action"] = "skipped"
+            action_summary["reason"] = "overnight_derisk_no_entry"
+            print(
+                f"[paper] {underlying} {signal_type}: skipped — no new 3x entry after "
+                f"de-risk start ({now.astimezone(_MARKET_TZ).strftime('%H:%M')} ET)"
+            )
+            actions.append(action_summary)
+            continue
+
         _MIN_INITIAL_ENTRY_PCT = 0.25
         _min_initial = max(_base_amount * _MIN_INITIAL_ENTRY_PCT, _min_trade_size_usd())
         _amount = max(_amount, _min_initial)
@@ -1883,7 +2153,9 @@ def process_signals(
             _amount = min(_amount, _remaining)
 
             # A trade that can't reach the minimum size after the portfolio
-            # cap isn't worth the fees/churn — skip it.
+            # cap isn't worth the fees/churn — skip it (dust floor re-checked
+            # after the cap shrink; the broker dispatch applies the same
+            # notional floor independently of any cap).
             _min_size = _min_trade_size_usd()
             if _min_size > 0 and _amount < _min_size:
                 action_summary["action"] = "skipped"
@@ -2130,7 +2402,16 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
         # vice versa).  This is NOT signal-type-specific — if the user
         # manually bought SPXL 20 minutes ago, the auto system won't buy
         # SPXL again regardless of signal type.
+        #
+        # A tighter 120-second redundant-market-order window is applied on top
+        # for OPENS, backed by the persisted alpaca_orders table so it works
+        # across processes and process restarts (the 30-minute in-memory
+        # cooldown dies with the process; the DB window does not). Any open for
+        # a symbol that already had a (non-error) order attempt within the last
+        # 120s is suppressed — two overlapped cron runs can never stack market
+        # orders for the same symbol.
         cooldown_filtered: list = []
+        _REDUNDANT_ORDER_WINDOW_SECONDS = 120
         for trade, event in pending:
             symbol = str(
                 getattr(trade, "execution_ticker", "") or
@@ -2144,6 +2425,24 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
                     f"cooldown={_ORDER_COOLDOWN_MINUTES}min)"
                 )
                 continue
+            if event == "open":
+                try:
+                    from database.models import AlpacaOrder as _AO
+                    _recent = db.query(_AO).filter(
+                        _AO.symbol == symbol,
+                        _AO.status != "error",
+                        _AO.created_at >= _safe_utc(_now_utc_dispatch) - timedelta(seconds=_REDUNDANT_ORDER_WINDOW_SECONDS),
+                    ).order_by(_AO.created_at.desc()).first()
+                except Exception:
+                    _recent = None
+                if _recent is not None:
+                    print(
+                        f"[alpaca] REDUNDANT-WINDOW: skipping open for {symbol} "
+                        f"(order {_recent.alpaca_order_id or _recent.id} submitted "
+                        f"{_safe_utc(_recent.created_at).strftime('%H:%M:%S')} — "
+                        f"within {_REDUNDANT_ORDER_WINDOW_SECONDS}s window)"
+                    )
+                    continue
             cooldown_filtered.append((trade, event))
 
         # Then deduplicate within the cooldown-filtered list
@@ -2274,6 +2573,20 @@ def _dispatch_alpaca_orders(db, pending: list, config) -> None:
             _sym = str(getattr(trade, "execution_ticker", "") or getattr(trade, "underlying", "?")).upper()
             _signal_type = str(getattr(trade, "signal_type", "") or "").upper()
             _underlying = str(getattr(trade, "underlying", "") or "").upper()
+
+            # ── Minimum order notional (dust suppression) ────────────────
+            # Mirror the paper-side min_trade_size_usd floor: skip opens whose
+            # notional can't clear the configured minimum so fee drag on
+            # micro/dust orders never reaches the broker.
+            _open_notional = float(getattr(trade, "amount", 0.0) or 0.0)
+            _min_notional = _min_trade_size_usd()
+            if _min_notional > 0 and _open_notional < _min_notional:
+                print(
+                    f"[alpaca] DUST: skipping open for {_sym} — notional ${_open_notional:.2f} "
+                    f"below min_trade_size_usd ${_min_notional:.2f}"
+                )
+                _skipped_opens += 1
+                continue
 
             # Check for conflicting live position
             _conflict = None

@@ -47,6 +47,7 @@ from services.data_ingestion.yfinance_client import PriceClient
 from services.data_ingestion.market_validation import MarketValidationClient
 from services.ollama import get_llm_backend_status
 from services.sentiment.engine import SentimentEngine
+from services.regime import market_regime_from_price_context
 from services.sentiment.prompts import (
     get_symbol_specialist_focus,
     format_symbol_specialist_context_prompt,
@@ -745,6 +746,7 @@ async def rerun_analysis_snapshot(
                 red_team_review=red_team_review,
                 quotes_by_symbol=quotes_by_symbol,
                 risk_profile=snapshot_risk,
+                regime=market_regime_from_price_context(price_context),
             )
             if red_team_debug and red_team_review:
                 red_team_debug.signal_changes = signal_service.build_red_team_signal_changes(

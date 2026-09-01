@@ -10,6 +10,16 @@
       "MEDIUM": 1.0,
       "LOW": 0.5
     },
+    "ic_scaling": {
+      "_comment": "Rolling-IC multiplier on top of the conviction scalar: size *= clamp(1 + ic_score * sensitivity, min, max). ic_score comes from the trailing Spearman IC of the symbol's own confidence-vs-return history (see services/rolling_ic.py). Null/unknown IC leaves sizing unchanged. strong_pct is the percentile bar used by the overnight de-risk exemption (3x holds must clear their own recent top decile).",
+      "enabled": true,
+      "sensitivity": 0.5,
+      "min_multiplier": 0.85,
+      "max_multiplier": 1.2,
+      "window_trades": 30,
+      "horizon": "1d",
+      "strong_pct": 90.0
+    },
     "min_size_multiple": 0.25,
     "max_size_multiple": 5.0,
     "_comment_cap": "portfolio_cap_usd: maximum total open exposure across all symbols. null = no cap. When set, individual trade sizes are scaled down to fit within the remaining capacity.",
@@ -96,6 +106,47 @@
     "_comment": "ATR-based volatility caps. When 14-day ATR % exceeds high_vol_atr_pct the position is capped at 1x regardless of profile. Exceeding medium_vol_atr_pct caps at 2x. Conservative profile (inverse ETF) is unaffected.",
     "high_vol_atr_pct": 3.0,
     "medium_vol_atr_pct": 1.5
+  },
+  "regime_filter": {
+    "_comment": "Whipsaw/regime filter for 3x leveraged ETFs (TQQQ/SQQQ/SPXL/SPXS). Regime is classified from the primary market symbols' indicators (QQQ/SPY): choppy when the 50/200 MA spread is tight (trend undefined) or ATR% is high with no trend. In a choppy regime the leverage cap is throttled to choppy_leverage_cap (2x → QLD/SSO/QID/SDS instead of 3x). 'unknown' regime (missing indicator data) fails open: no throttling. Consulted in signal_service._resolve_leverage at signal-generation time, so existing 3x positions downshift via the normal ticker-leverage-change close-and-reopen path in paper_trading.",
+    "enabled": true,
+    "chop_ma_spread_pct": 1.0,
+    "chop_atr_pct": 2.5,
+    "choppy_leverage_cap": 2,
+    "primary_market_symbols": [
+      "QQQ",
+      "SPY"
+    ]
+  },
+  "overnight_derisk": {
+    "_comment": "Mandatory intraday time-stop for 3x instruments. After start_et ET, any open 3x position is force-liquidated before the close unless BOTH conviction is in exempt_convictions AND the symbol's trailing rolling IC clears its own 90th-percentile bar (ic_strong from services/rolling_ic.py). Missing IC evidence never exempts (fail-closed): a 3x scalp that can't prove exceptional edge is cut before close. Same gate blocks NEW 3x entries after start_et.",
+    "enabled": true,
+    "start_et": "15:00",
+    "exempt_convictions": [
+      "HIGH"
+    ],
+    "require_ic_strong": true
+  },
+  "counter_trend_cooldown": {
+    "_comment": "Slippage safeguard for counter-trend whipsaws (e.g. USO/BITU in persistent macro downtrends). After N consecutive stopped-out trades in the same direction within the 5-day window, new signal generation for that symbol+direction is blocked for cooldown_hours. A non-stop-out close (e.g. take-profit) between them resets the consecutive chain.",
+    "enabled": true,
+    "stop_out_window_days": 5,
+    "required_consecutive_stopouts": 2,
+    "cooldown_hours": 72,
+    "stop_out_reasons": [
+      "stop_loss_hit",
+      "trailing_stop_hit"
+    ]
+  },
+  "run_length_protection": {
+    "_comment": "Let high-conviction single-stock swing winners compound: on a take-profit breach, instead of hard-closing at the fixed take_profit_pct, convert to a widened ATR trailing stop (buffer = max(take_profit_pct, atr_14_pct * trail_buffer_atr_mult)) and extend the holding window. Only applies to listed convictions on underlyings NOT in the leveraged ETF families (INSTRUMENT_SPECS: QQQ/SPY/USO/IBIT/BITO) — leveraged vehicles keep the fixed take-profit.",
+    "enabled": true,
+    "convictions": [
+      "HIGH"
+    ],
+    "trail_buffer_atr_mult": 1.5,
+    "min_trail_pct": 3.0,
+    "max_trail_pct": 8.0
   },
   "trailing_stop": {
     "_comment": "When a HOLD signal fires on an open position, a trailing stop is set instead of forcing a market close. Stop = best_price_seen x (1 +/- stop_loss_pct x tighten_factor). Updated every run while in trailing mode.",

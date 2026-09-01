@@ -380,3 +380,46 @@ class RollingWindowOptimizer:
             'win_rate': win_rate,
             'total_trades': len(trade_returns)
         }
+
+
+def max_day_trades_in_rolling_window(
+    round_trips: List[Tuple[datetime, datetime]],
+    window_days: int = 5,
+) -> int:
+    """
+    PDT stress check: maximum number of day trades (round trips opened and
+    closed on the same calendar day) inside any rolling `window_days`-day
+    window. A margin account is flagged pattern-day-trader at 3+ day trades in
+    5 rolling trading days, so the de-risked execution rules must never push
+    this above 3.
+
+    Pure helper used by the verification tests; takes (open_dt, close_dt) UTC
+    pairs and counts only pairs whose open and close fall on the same calendar
+    day.
+    """
+    daily: Dict[str, int] = {}
+    for open_dt, close_dt in round_trips:
+        if open_dt is None or close_dt is None:
+            continue
+        try:
+            same_day = open_dt.date() == close_dt.date()
+        except AttributeError:
+            same_day = open_dt.date() == close_dt.date()  # pandas Timestamp has .date()
+        if same_day:
+            key = str(open_dt.date())
+            daily[key] = daily.get(key, 0) + 1
+
+    days = sorted(daily)
+    if not days:
+        return 0
+    max_count = 0
+    for i, day in enumerate(days):
+        window_end = pd.Timestamp(day) + pd.Timedelta(days=window_days)
+        count = 0
+        for j in range(i, len(days)):
+            if pd.Timestamp(days[j]) < window_end:
+                count += daily[days[j]]
+            else:
+                break
+        max_count = max(max_count, count)
+    return max_count

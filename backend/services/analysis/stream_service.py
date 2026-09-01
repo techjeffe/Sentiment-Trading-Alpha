@@ -26,6 +26,7 @@ from services.analysis.materiality_service import MaterialityService
 from services.analysis.hysteresis_service import HysteresisService
 from services.analysis.persistence_service import PersistenceService
 from services.analysis.backtest_service import BacktestService
+from services.regime import market_regime_from_price_context
 from services.analysis.cache_service import PriceCacheService
 from services.symbol_proxy_terms import ensure_symbol_proxy_terms_fresh
 from services.risk_policy_runtime import build_crazy_ramp_context
@@ -325,6 +326,7 @@ class StreamService:
             red_team_review=red_team_review,
             quotes_by_symbol=quotes_by_symbol,
             risk_profile=getattr(config, 'risk_profile', 'moderate'),
+            regime=market_regime_from_price_context(price_context),
         )
 
         # Serialize result

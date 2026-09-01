@@ -427,6 +427,15 @@ class AppConfig(Base):
     accumulate_on_confirmation_enabled = Column(Boolean, nullable=True, default=None)
     accumulate_max_multiplier = Column(Float, nullable=True, default=None)
 
+    # ── Execution rules (JSON blob of partial per-section overrides) ────────
+    # Shape: {"regime_filter": {"enabled": false}, "overnight_derisk": {...},
+    #        "counter_trend_cooldown": {...}, "run_length_protection": {...},
+    #        "ic_scaling": {...}}.
+    # Null/empty = all blocks use logic_config.json defaults.  The runtime
+    # merges this over the JSON defaults (services/regime.refresh_rule_overrides)
+    # at the start of each analysis run.
+    execution_rules_json = Column(Text, nullable=True, default=None)
+
     # ── Alpaca brokerage execution ────────────────────────────────────────────
     alpaca_execution_mode         = Column(String(10),  nullable=False, default="off")  # off | paper | live
     alpaca_pre_stop_mode          = Column(String(10),  nullable=True,  default=None)   # saved by /stop bot command

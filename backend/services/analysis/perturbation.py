@@ -11,6 +11,7 @@ Usage (from the alpha router):
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -58,7 +59,8 @@ def run_perturbation(
             dls.blended_directional_score,
             dls.entry_threshold_used,
             dls.final_signal_type,
-            dlr.run_id
+            dlr.run_id,
+            dlr.started_at
         FROM decision_log_symbol dls
         JOIN decision_log_run dlr ON dlr.run_id = dls.run_id
         WHERE dls.entry_threshold_used IS NOT NULL
@@ -166,6 +168,37 @@ def run_perturbation(
         for h in horizons
     }
 
+    # ── Whipsaw / churn proxy ────────────────────────────────────────────────
+    # Counts same-symbol adjacent LONG→SHORT or SHORT→LONG signals inside a
+    # 5-day window across the sampled history. These are the round-trip churn
+    # pairs that the regime filter (entry throttle) + counter-trend cooldown
+    # are designed to eliminate; the backtest verification asserts the
+    # reduction these rules produce. Pure signal-level proxy (fill/stop-out
+    # data lives in paper_trades, not the decision log).
+    from datetime import timedelta as _td
+    whipsaw_pairs = 0
+    directional = 0
+    per_symbol_seq: Dict[str, List[Any]] = {}
+    for row in rows:
+        stype = str(row.final_signal_type or "").upper()
+        if stype not in {"LONG", "SHORT"}:
+            continue
+        if stype == "LONG":
+            directional += 1
+        sym = str(row.symbol or "").upper()
+        per_symbol_seq.setdefault(sym, []).append((row.started_at, stype))
+    for sym, seq in per_symbol_seq.items():
+        seq_sorted = sorted(seq, key=lambda t: t[0] or datetime.min)
+        for (t_prev, dir_prev), (t_cur, dir_cur) in zip(seq_sorted, seq_sorted[1:]):
+            if dir_prev == dir_cur:
+                continue
+            if t_prev and t_cur:
+                try:
+                    if (t_cur - t_prev).total_seconds() <= 5 * 86400:
+                        whipsaw_pairs += 1
+                except TypeError:
+                    pass
+
     return {
         "rows_analyzed": len(rows),
         "rows_available": total_eligible,
@@ -178,4 +211,10 @@ def run_perturbation(
         "baseline": _scenario(0.0),
         "nudge_up": _scenario(nudge_pct),
         "nudge_down": _scenario(-nudge_pct),
+        "whipsaw": {
+            "opposite_direction_pairs_5d": whipsaw_pairs,
+            "directional_signals": directional,
+            "churn_ratio": round(whipsaw_pairs / directional, 4) if directional else 0.0,
+            "_note": "Signal-level proxy: consecutive same-symbol opposite-direction signals within 5 days. Regime filter + counter-trend cooldown suppress these in production; verify reduction via the backtest harness.",
+        },
     }

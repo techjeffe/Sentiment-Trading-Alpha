@@ -378,6 +378,98 @@ def _normalize_trading_logic_int(value: Any, min_val: int, max_val: int) -> Opti
     return max(min_val, min(max_val, v))
 
 
+# Schema for the execution_rules_json admin blob. Only these sections/keys are
+# accepted; anything else in the payload is dropped at save time.
+_EXECUTION_RULES_SCHEMA: Dict[str, Dict[str, type]] = {
+    "regime_filter": {
+        "enabled": bool,
+        "chop_ma_spread_pct": float,
+        "chop_atr_pct": float,
+        "choppy_leverage_cap": int,
+    },
+    "overnight_derisk": {
+        "enabled": bool,
+        "start_et": str,
+        "require_ic_strong": bool,
+        "exempt_convictions": list,
+    },
+    "counter_trend_cooldown": {
+        "enabled": bool,
+        "stop_out_window_days": int,
+        "required_consecutive_stopouts": int,
+        "cooldown_hours": int,
+    },
+    "run_length_protection": {
+        "enabled": bool,
+        "convictions": list,
+        "trail_buffer_atr_mult": float,
+        "min_trail_pct": float,
+        "max_trail_pct": float,
+    },
+    "ic_scaling": {
+        "enabled": bool,
+        "sensitivity": float,
+        "min_multiplier": float,
+        "max_multiplier": float,
+        "strong_pct": float,
+    },
+}
+
+
+def _normalize_execution_rules_json(value: Any) -> Optional[str]:
+    """Validate + whitelist the admin execution-rules blob, return compact JSON."""
+    if value is None or value == "":
+        return None
+    try:
+        blob = json.loads(value) if isinstance(value, str) else dict(value or {})
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(blob, dict) or not blob:
+        return None
+    cleaned: Dict[str, Any] = {}
+    for section, fields in _EXECUTION_RULES_SCHEMA.items():
+        override = blob.get(section)
+        if not isinstance(override, dict) or not override:
+            continue
+        section_clean: Dict[str, Any] = {}
+        for key, kind in fields.items():
+            if key not in override or override[key] is None:
+                continue
+            val = override[key]
+            try:
+                if kind is bool:
+                    section_clean[key] = bool(val)
+                elif kind is int:
+                    section_clean[key] = int(val)
+                elif kind is float:
+                    section_clean[key] = round(float(val), 4)
+                elif kind is str:
+                    s = str(val).strip()
+                    if s:
+                        section_clean[key] = s
+                elif kind is list:
+                    if isinstance(val, str):
+                        items = [v.strip().upper() for v in val.split(",") if v.strip()]
+                    else:
+                        items = [str(v).strip().upper() for v in val if str(v).strip()]
+                    if items:
+                        section_clean[key] = items
+            except (TypeError, ValueError):
+                continue
+        # start_et must be HH:MM for _parse_et_time; anything else is dropped
+        # (falls back to the JSON default) rather than stored and later raised on.
+        if "start_et" in section_clean:
+            try:
+                hh, mm = str(section_clean["start_et"]).split(":")
+                if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
+                    raise ValueError
+            except (ValueError, TypeError):
+                section_clean.pop("start_et", None)
+        if section_clean:
+            cleaned[section] = section_clean
+    return json.dumps(cleaned, separators=(",", ":")) if cleaned else None
+
+
 def _normalize_risk_profile(value: Any) -> str:
     profile = str(value or "").strip().lower()
     profile = LEGACY_RISK_PROFILE_ALIASES.get(profile, profile)
@@ -1191,6 +1283,12 @@ def update_app_config(db: Session, payload: Dict[str, Any]) -> AppConfig:
     if "accumulate_max_multiplier" in payload:
         config.accumulate_max_multiplier = _normalize_trading_logic_float(payload.get("accumulate_max_multiplier"), 1.0, 100.0)
 
+    # ── Execution rules JSON blob (partial per-section overrides) ──
+    # Validates keys against the known sections/fields and stores only
+    # recognized values; unknown sections/keys are dropped. None/{} clears.
+    if "execution_rules_json" in payload:
+        config.execution_rules_json = _normalize_execution_rules_json(payload.get("execution_rules_json"))
+
     db.add(config)
     db.commit()
     db.refresh(config)
@@ -1465,6 +1563,8 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         "hold_decay_enabled": getattr(config, "hold_decay_enabled", None),
         "accumulate_on_confirmation_enabled": getattr(config, "accumulate_on_confirmation_enabled", None),
         "accumulate_max_multiplier": getattr(config, "accumulate_max_multiplier", None),
+        # Execution rules JSON blob (partial per-section overrides; null = defaults)
+        "execution_rules_json": getattr(config, "execution_rules_json", None),
         # Alpaca brokerage execution settings
         "alpaca_execution_mode":         _normalize_alpaca_execution_mode(
             getattr(config, "alpaca_execution_mode", DEFAULT_ALPACA_EXECUTION_MODE)
@@ -1512,6 +1612,44 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
                     _L.get("reentry_cooldown_minutes", 120))),
                 "min_same_day_exit_edge_pct": float(_L.get("crazy", {}).get("min_same_day_exit_edge_pct",
                     _L.get("min_same_day_exit_edge_pct", 0.5))),
+            },
+            # Execution rules defaults (from logic_config.json "regime_filter",
+            # "overnight_derisk", "counter_trend_cooldown",
+            # "run_length_protection" + vol_sizing.ic_scaling) — shown as
+            # placeholders in the Execution Rules admin section.
+            "execution_rules": {
+                "regime_filter": {
+                    "enabled": bool(_L.get("regime_filter", {}).get("enabled", True)),
+                    "chop_ma_spread_pct": float(_L.get("regime_filter", {}).get("chop_ma_spread_pct", 1.0)),
+                    "chop_atr_pct": float(_L.get("regime_filter", {}).get("chop_atr_pct", 2.5)),
+                    "choppy_leverage_cap": int(_L.get("regime_filter", {}).get("choppy_leverage_cap", 2)),
+                },
+                "overnight_derisk": {
+                    "enabled": bool(_L.get("overnight_derisk", {}).get("enabled", True)),
+                    "start_et": str(_L.get("overnight_derisk", {}).get("start_et", "15:00")),
+                    "require_ic_strong": bool(_L.get("overnight_derisk", {}).get("require_ic_strong", True)),
+                    "exempt_convictions": list(_L.get("overnight_derisk", {}).get("exempt_convictions", ["HIGH"])),
+                },
+                "counter_trend_cooldown": {
+                    "enabled": bool(_L.get("counter_trend_cooldown", {}).get("enabled", True)),
+                    "stop_out_window_days": int(_L.get("counter_trend_cooldown", {}).get("stop_out_window_days", 5)),
+                    "required_consecutive_stopouts": int(_L.get("counter_trend_cooldown", {}).get("required_consecutive_stopouts", 2)),
+                    "cooldown_hours": int(_L.get("counter_trend_cooldown", {}).get("cooldown_hours", 72)),
+                },
+                "run_length_protection": {
+                    "enabled": bool(_L.get("run_length_protection", {}).get("enabled", True)),
+                    "convictions": list(_L.get("run_length_protection", {}).get("convictions", ["HIGH"])),
+                    "trail_buffer_atr_mult": float(_L.get("run_length_protection", {}).get("trail_buffer_atr_mult", 1.5)),
+                    "min_trail_pct": float(_L.get("run_length_protection", {}).get("min_trail_pct", 3.0)),
+                    "max_trail_pct": float(_L.get("run_length_protection", {}).get("max_trail_pct", 8.0)),
+                },
+                "ic_scaling": {
+                    "enabled": bool((_L.get("vol_sizing", {}) or {}).get("ic_scaling", {}).get("enabled", True)),
+                    "sensitivity": float((_L.get("vol_sizing", {}) or {}).get("ic_scaling", {}).get("sensitivity", 0.5)),
+                    "min_multiplier": float((_L.get("vol_sizing", {}) or {}).get("ic_scaling", {}).get("min_multiplier", 0.85)),
+                    "max_multiplier": float((_L.get("vol_sizing", {}) or {}).get("ic_scaling", {}).get("max_multiplier", 1.2)),
+                    "strong_pct": float((_L.get("vol_sizing", {}) or {}).get("ic_scaling", {}).get("strong_pct", 90.0)),
+                },
             },
         },
         "last_analysis_started_at": config.last_analysis_started_at.isoformat() if config.last_analysis_started_at else None,

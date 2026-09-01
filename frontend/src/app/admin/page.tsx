@@ -39,6 +39,7 @@ function deriveProviderFromUrl(urlStr: string): string {
 import { OverviewSection } from "@/components/admin/sections/OverviewSection";
 import { TradingLogicSection } from "@/components/admin/sections/TradingLogicSection";
 import { TradingBehaviorSection } from "@/components/admin/sections/TradingBehaviorSection";
+import { ExecutionRulesSection } from "@/components/admin/sections/ExecutionRulesSection";
 import { SymbolsSection } from "@/components/admin/sections/SymbolsSection";
 import { RssSection } from "@/components/admin/sections/RssSection";
 import { PromptOverridesSection } from "@/components/admin/sections/PromptOverridesSection";
@@ -220,7 +221,8 @@ export default function AdminPage() {
         ];
     const sectionOptions = [
         { value: "overview", label: "Overview", description: "Risk profile, depth, models, and pipeline posture." },
-        { value: "trading", label: "Trading + Execution", description: "Guardrails and Alpaca routing." },
+        { value: "trading", label: "Trading + Execution", description: "Session guardrails and Alpaca routing." },
+        { value: "execution", label: "Execution Rules", description: "Regime throttle, overnight de-risk, cooldowns, and IC sizing." },
         { value: "symbols", label: "Symbols + RSS", description: "Tracked symbols, custom names, and feed sources." },
         { value: "system", label: "System / Telegram", description: "Auto-run, snapshots, remote control, and price-history status." },
     ];
@@ -1167,6 +1169,12 @@ export default function AdminPage() {
                                     onAcknowledgeOrphan={acknowledgeOrphan}
                                 />
                             </>
+                        )}
+                        {selectedSection === "execution" && (
+                            <ExecutionRulesSection
+                                config={config}
+                                setConfig={setConfig}
+                            />
                         )}
                         {selectedSection === "symbols" && (
                             <>
