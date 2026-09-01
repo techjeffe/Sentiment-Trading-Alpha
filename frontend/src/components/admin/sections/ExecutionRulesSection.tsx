@@ -260,6 +260,27 @@ export function ExecutionRulesSection({ config, setConfig }: ExecutionRulesSecti
                                         );
                                     }
 
+                                    if (field.kind === "text") {
+                                        return (
+                                            <label key={field.key} className="block">
+                                                <span className="flex items-center text-xs text-slate-400">
+                                                    {field.label}
+                                                    <Tooltip text={field.tooltip} />
+                                                </span>
+                                                <input
+                                                    type="text"
+                                                    value={hasValue ? String(current) : ""}
+                                                    placeholder={placeholder}
+                                                    onChange={(e) => {
+                                                        const text = e.target.value.trim();
+                                                        setField(id, field.key, text || null, text === "");
+                                                    }}
+                                                    className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white placeholder:text-slate-600"
+                                                />
+                                            </label>
+                                        );
+                                    }
+
                                     if (field.kind === "list") {
                                         return (
                                             <label key={field.key} className="block">

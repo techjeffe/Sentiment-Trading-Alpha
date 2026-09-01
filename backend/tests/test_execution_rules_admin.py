@@ -83,6 +83,25 @@ def test_execution_rules_json_null_clears(db_session):
     assert cfg.execution_rules_json is None
 
 
+def test_execution_rules_start_et_rejects_non_hhmm(db_session):
+    """Regression: a bare number "14" (old frontend bug) must be dropped at save,
+    not persisted where _parse_et_time would raise."""
+    _seed(db_session)
+    update_app_config(db_session, {"execution_rules_json": json_dumps({
+        "overnight_derisk": {"start_et": 14, "enabled": True},
+    })})
+    import json as _json
+    blob = _json.loads(get_or_create_app_config(db_session).execution_rules_json)
+    assert blob["overnight_derisk"]["enabled"] is True
+    assert "start_et" not in blob["overnight_derisk"]   # invalid value dropped
+    # valid HH:MM survives
+    update_app_config(db_session, {"execution_rules_json": json_dumps({
+        "overnight_derisk": {"start_et": "14:30"},
+    })})
+    blob = _json.loads(get_or_create_app_config(db_session).execution_rules_json)
+    assert blob["overnight_derisk"]["start_et"] == "14:30"
+
+
 def test_serialized_config_includes_blob_and_defaults(db_session):
     _seed(db_session)
     update_app_config(db_session, {"execution_rules_json": json_dumps({"regime_filter": {"enabled": False}})})

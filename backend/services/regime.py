@@ -182,8 +182,14 @@ def regime_leverage_cap(regime: str, raw_cap: int) -> int:
 # ── Overnight de-risking (mandatory time-stop for 3x) ─────────────────────
 
 def _parse_et_time(value: str) -> time_cls:
-    hh, mm = (str(value or "15:00")).split(":")
-    return time_cls(int(hh), int(mm))
+    """'HH:MM' → time. Malformed/legacy values (e.g. a bare '14' persisted by
+    an old admin bug) fall back to 15:00 instead of raising — a bad stored
+    start_et must never abort a signal run."""
+    try:
+        hh, mm = (str(value or "15:00")).split(":")
+        return time_cls(int(hh), int(mm))
+    except (ValueError, TypeError):
+        return time_cls(15, 0)
 
 
 def overnight_derisk_required(

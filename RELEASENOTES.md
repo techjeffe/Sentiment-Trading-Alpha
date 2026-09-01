@@ -1,5 +1,25 @@
 # Release Notes
 
+## 🐛 Fixes: snapshot rerun 500, IC never operating, start_et crash, stale IC window
+
+### What Changed
+- **Snapshot rerun NameError** — `routers/analysis.py` used `market_regime_from_price_context` (consensus-signal regime throttle) without importing it; every rerun_analysis_snapshot request 500'd at `build_consensus_trading_signal`. Helper now imported alongside the other service imports. Regression test asserts the module binding.
+- **IC sizing / strong-IC exemption dead** — `services/rolling_ic._paired_series` referenced an undefined `bindparam`; once a symbol had any eligible decision-log rows the query raised NameError, which `fetch_sizing_ic` swallowed into `ic_score=None / ic_strong=False`. Imported `bindparam` from SQLAlchemy — IC-based allocation and the 90th-pct derisk exemption now actually run.
+- **Stale IC window for long histories** — the fetch was `ORDER BY started_at ASC LIMIT 400`, returning the OLDEST rows; the trailing window then ignored recent performance. Now fetches newest-first and restores chronological order before windowing.
+- **start_et text field rendered as number** — the `text` kind fell through to the number input (browsers cleared "15:00", stored bare "14"), which persisted as `"14"` and made `_parse_et_time` raise mid-run. Frontend: dedicated text renderer for `start_et`. Backend (belt-and-suspenders): the app_config whitelist rejects any non-`HH:MM` `start_et` at save, and `_parse_et_time` falls back to 15:00 on a malformed/legacy value so a bad value can never abort a signal run.
+
+### Testing
+- New `tests/test_rolling_ic.py` (3): 500-row seed with newest-30 correlated block — trailing IC ≈ +1 (would be ≈ -1 / NameError before fixes), `fetch_sizing_ic` strong, empty-history neutral.
+- Added regression tests: `routers.analysis` imports the regime helper; `_parse_et_time` tolerates bare-hour/empty garbage; app_config drops non-HH:MM `start_et` at save.
+- Backend suite 179 green (2 pre-existing `praw` env failures); `next build` clean.
+
+### Files Changed
+- `backend/routers/analysis.py`, `backend/services/rolling_ic.py`, `backend/services/regime.py`, `backend/services/app_config.py`
+- `frontend/src/components/admin/sections/ExecutionRulesSection.tsx`
+- `backend/tests/test_rolling_ic.py` (new), `backend/tests/test_execution_rules_admin.py`, `backend/tests/test_regime_and_execution_rules.py`
+
+---
+
 ## 🎛️ Execution Rules in the Admin Console (UI for the 4-rule refinement set)
 
 ### What Changed

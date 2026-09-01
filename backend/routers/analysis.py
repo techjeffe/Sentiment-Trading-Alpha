@@ -47,6 +47,7 @@ from services.data_ingestion.yfinance_client import PriceClient
 from services.data_ingestion.market_validation import MarketValidationClient
 from services.ollama import get_llm_backend_status
 from services.sentiment.engine import SentimentEngine
+from services.regime import market_regime_from_price_context
 from services.sentiment.prompts import (
     get_symbol_specialist_focus,
     format_symbol_specialist_context_prompt,

@@ -168,6 +168,25 @@ def test_classify_from_prices_trending_series():
     assert classify_regime_from_prices(trend) == "trending"
 
 
+def test_analysis_router_imports_regime_helper():
+    """Regression: rerun_analysis_snapshot calls market_regime_from_price_context;
+    a missing import was a runtime NameError on every snapshot rerun."""
+    import routers.analysis as ra
+    from services.regime import market_regime_from_price_context
+    assert ra.market_regime_from_price_context is market_regime_from_price_context
+
+
+def test_parse_et_time_tolerates_legacy_bare_hour():
+    """Regression: an old admin bug stored start_et as a bare number ("14");
+    _parse_et_time must fall back instead of raising mid-run."""
+    from services.regime import _parse_et_time
+    from datetime import time as time_cls
+    assert _parse_et_time("14") == time_cls(15, 0)  # malformed → default 15:00
+    assert _parse_et_time("14:30") == time_cls(14, 30)
+    assert _parse_et_time("") == time_cls(15, 0)
+    assert _parse_et_time("bogus") == time_cls(15, 0)
+
+
 def test_resolve_leverage_respects_regime_throttle():
     from services.analysis.signal_service import SignalService
     svc = SignalService(_L)

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
 from sqlalchemy.orm import Session
 
 from services.regime import effective_rule
@@ -76,7 +76,7 @@ def _paired_series(
             JOIN decision_log_run dlr ON dlr.run_id = dls.run_id
             WHERE dls.symbol = :sym
               AND dls.blended_confidence_score IS NOT NULL
-            ORDER BY dlr.started_at ASC
+            ORDER BY dlr.started_at DESC
             LIMIT :lim
             """
         ),
@@ -84,6 +84,9 @@ def _paired_series(
     ).fetchall()
     if not dl_rows:
         return []
+    # DESC + LIMIT fetched the NEWEST rows; restore chronological (ascending)
+    # order so trailing_ic / ic_percentile treat the tail as "most recent".
+    dl_rows = list(reversed(dl_rows))
     run_ids = [r.run_id for r in dl_rows]
     ret_rows = main_db.execute(
         text(

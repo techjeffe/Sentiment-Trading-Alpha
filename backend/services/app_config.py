@@ -456,6 +456,15 @@ def _normalize_execution_rules_json(value: Any) -> Optional[str]:
                         section_clean[key] = items
             except (TypeError, ValueError):
                 continue
+        # start_et must be HH:MM for _parse_et_time; anything else is dropped
+        # (falls back to the JSON default) rather than stored and later raised on.
+        if "start_et" in section_clean:
+            try:
+                hh, mm = str(section_clean["start_et"]).split(":")
+                if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
+                    raise ValueError
+            except (ValueError, TypeError):
+                section_clean.pop("start_et", None)
         if section_clean:
             cleaned[section] = section_clean
     return json.dumps(cleaned, separators=(",", ":")) if cleaned else None
